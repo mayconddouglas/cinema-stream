@@ -68,3 +68,39 @@ export async function tmdbMovie(id: number, language = "pt-BR") {
 
   return (await res.json()) as TmdbMovieDetails;
 }
+
+export async function tmdbTrending(language = "pt-BR") {
+  const base = getProxyBase();
+  if (!base) throw new Error("proxy_not_configured");
+
+  const url = new URL(`${base}/tmdb/trending`);
+  if (language) url.searchParams.set("language", language);
+
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+    const msg = typeof body?.error === "string" ? body.error : "tmdb_trending_failed";
+    throw new Error(msg);
+  }
+
+  const data = (await res.json()) as { results?: unknown };
+  return (Array.isArray(data?.results) ? data.results : []) as TmdbSearchItem[];
+}
+
+export async function tmdbPopular(language = "pt-BR") {
+  const base = getProxyBase();
+  if (!base) throw new Error("proxy_not_configured");
+
+  const url = new URL(`${base}/tmdb/popular`);
+  if (language) url.searchParams.set("language", language);
+
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+    const msg = typeof body?.error === "string" ? body.error : "tmdb_popular_failed";
+    throw new Error(msg);
+  }
+
+  const data = (await res.json()) as { results?: unknown };
+  return (Array.isArray(data?.results) ? data.results : []) as TmdbSearchItem[];
+}

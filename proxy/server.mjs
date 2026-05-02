@@ -208,7 +208,9 @@ const server = http.createServer(async (req, res) => {
       url.pathname !== "/meta" &&
       url.pathname !== "/file" &&
       url.pathname !== "/tmdb/search" &&
-      url.pathname !== "/tmdb/movie"
+      url.pathname !== "/tmdb/movie" &&
+      url.pathname !== "/tmdb/trending" &&
+      url.pathname !== "/tmdb/popular"
     ) {
       sendJson(res, 404, { error: "not_found" });
       return;
@@ -246,6 +248,41 @@ const server = http.createServer(async (req, res) => {
             backdrop: r.backdrop_path ? `${TMDB_IMAGE_BASE}/w780${r.backdrop_path}` : null,
           }));
 
+          sendJson(res, 200, { results: mapped });
+          return;
+        }
+
+        if (url.pathname === "/tmdb/trending") {
+          const language = url.searchParams.get("language") || "pt-BR";
+          const data = await tmdbFetch("/trending/movie/day", { language });
+          const results = Array.isArray(data?.results) ? data.results : [];
+          const mapped = results.slice(0, 24).map((r) => ({
+            id: r.id,
+            title: r.title,
+            originalTitle: r.original_title,
+            overview: r.overview,
+            year: r.release_date ? String(r.release_date).slice(0, 4) : null,
+            poster: r.poster_path ? `${TMDB_IMAGE_BASE}/w500${r.poster_path}` : null,
+            backdrop: r.backdrop_path ? `${TMDB_IMAGE_BASE}/w780${r.backdrop_path}` : null,
+          }));
+          sendJson(res, 200, { results: mapped });
+          return;
+        }
+
+        if (url.pathname === "/tmdb/popular") {
+          const language = url.searchParams.get("language") || "pt-BR";
+          const page = url.searchParams.get("page") || "1";
+          const data = await tmdbFetch("/movie/popular", { language, page });
+          const results = Array.isArray(data?.results) ? data.results : [];
+          const mapped = results.slice(0, 24).map((r) => ({
+            id: r.id,
+            title: r.title,
+            originalTitle: r.original_title,
+            overview: r.overview,
+            year: r.release_date ? String(r.release_date).slice(0, 4) : null,
+            poster: r.poster_path ? `${TMDB_IMAGE_BASE}/w500${r.poster_path}` : null,
+            backdrop: r.backdrop_path ? `${TMDB_IMAGE_BASE}/w780${r.backdrop_path}` : null,
+          }));
           sendJson(res, 200, { results: mapped });
           return;
         }
