@@ -54,6 +54,17 @@ type AudioTrackLike = { enabled: boolean; language?: string; label?: string };
 type AudioTrackListLike = { length: number; [i: number]: AudioTrackLike };
 type VideoWithAudioTracks = HTMLVideoElement & { audioTracks?: AudioTrackListLike };
 
+function getInfoHashFromMagnet(magnet: string) {
+  try {
+    const url = new URL(magnet);
+    const xt = url.searchParams.get("xt") ?? "";
+    if (xt.startsWith("urn:btih:")) return xt.slice(9).toLowerCase();
+    return "";
+  } catch {
+    return "";
+  }
+}
+
 function formatBytes(bytes: number, perSecond = false) {
   const suffix = perSecond ? "/s" : "";
   if (bytes < 1024) return `${bytes.toFixed(0)} B${suffix}`;
@@ -159,6 +170,8 @@ export function Player({
   const proxySwitchRef = useRef<((index: number) => Promise<void>) | null>(null);
   const webrtcSwitchRef = useRef<((id: string) => Promise<void>) | null>(null);
   const webrtcQualityIdRef = useRef<string | null>(null);
+  const forceProxyRef = useRef<(() => void) | null>(null);
+  const sourceModeRef = useRef<SourceMode>("webrtc");
   const [phase, setPhase] = useState<Phase>("connecting");
   const [sourceMode, setSourceMode] = useState<SourceMode>("webrtc");
   const [statusMsg, setStatusMsg] = useState("Conectando à rede de peers...");
@@ -171,6 +184,7 @@ export function Player({
   const [audioChoice, setAudioChoice] = useState<string>("auto");
   const [qualityOptions, setQualityOptions] = useState<QualityOption[]>([]);
   const [qualityChoice, setQualityChoice] = useState<string>("auto");
+  const [showForceProxy, setShowForceProxy] = useState(false);
   const [stats, setStats] = useState<Stats>({
     downloadSpeed: 0,
     uploadSpeed: 0,
@@ -187,6 +201,17 @@ export function Player({
   useEffect(() => {
     qualityOptionsRef.current = qualityOptions;
   }, [qualityOptions]);
+
+  useEffect(() => {
+    sourceModeRef.current = sourceMode;
+  }, [sourceMode]);
+
+  useEffect(() => {
+    setShowForceProxy(false);
+    if (sourceMode !== "webrtc") return;
+    const t = setTimeout(() => setShowForceProxy(true), 8_000);
+    return () => clearTimeout(t);
+  }, [item.id, sourceMode]);
 
   useEffect(() => {
     let destroyed = false;
@@ -240,6 +265,10 @@ export function Player({
           const onLoadedMeta = () => {
             setPhase("ready");
             setStatusMsg("");
+            const infoHash = getInfoHashFromMagnet(item.magnet);
+            if (infoHash) {
+              safeSetPref(`buffet_conn_mode_${infoHash}`, sourceModeRef.current);
+            }
             if (item.progress && item.progress > 5 && item.duration) {
               try {
                 video.currentTime = item.progress;
@@ -551,6 +580,17 @@ export function Player({
             }
           }, 10_000);
         };
+
+        forceProxyRef.current = () => {
+          startProxy("Forçado pelo usuário.");
+        };
+
+        const infoHash = getInfoHashFromMagnet(item.magnet);
+        const cachedMode = infoHash ? safeGetPref(`buffet_conn_mode_${infoHash}`) : "";
+        if (cachedMode === "proxy") {
+          startProxy("Usando modo proxy salvo para este magnet.");
+          return;
+        }
 
         const client = new WebTorrent();
         clientRef.current = client;
@@ -1069,6 +1109,16 @@ export function Player({
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 p-6 text-center">
               <Loader2 className="h-10 w-10 text-primary animate-spin" />
               <p className="text-sm text-cream font-medium">{statusMsg}</p>
+              {showForceProxy &&
+                sourceMode === "webrtc" &&
+                (phase === "connecting" || phase === "buffering") && (
+                  <button
+                    onClick={() => forceProxyRef.current?.()}
+                    className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-glow hover:brightness-110 transition"
+                  >
+                    Usar servidor proxy
+                  </button>
+                )}
               <div className="text-xs text-muted-foreground space-y-1">
                 {sourceMode === "proxy" ? (
                   <p>Modo: Proxy</p>
@@ -1184,7 +1234,16 @@ export function Player({
           />
           <Stat
             icon={<Users className="h-3.5 w-3.5 text-primary" />}
-            label={sourceMode === "proxy" ? "proxy" : `${stats.peers} peers`}
+            label={
+              sourceMode === "proxy" ? (
+                <ModeBadge mode="proxy" />
+              ) : (
+                <span className="inline-flex items-center gap-2">
+                  <ModeBadge mode="webrtc" />
+                  <span>{stats.peers} peers</span>
+                </span>
+              )
+            }
           />
           <div className="flex-1 min-w-[140px]">
             <div className="flex items-center justify-between mb-1">
@@ -1204,7 +1263,22 @@ export function Player({
   );
 }
 
-function Stat({ icon, label }: { icon: React.ReactNode; label: string }) {
+function ModeBadge({ mode }: { mode: SourceMode }) {
+  if (mode === "proxy") {
+    return (
+      <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-amber-300">
+        Proxy
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-emerald-300">
+      WebRTC
+    </span>
+  );
+}
+
+function Stat({ icon, label }: { icon: React.ReactNode; label: React.ReactNode }) {
   return (
     <div className="flex items-center gap-1.5">
       {icon}
