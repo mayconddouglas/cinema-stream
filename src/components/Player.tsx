@@ -162,6 +162,18 @@ function guessLangFromName(name: string) {
   return { lang: "und", label: "Desconhecido" };
 }
 
+function langLabel(lang: string) {
+  const l = lang.toLowerCase();
+  if (l === "por" || l === "pt" || l === "pt-br") return "Português";
+  if (l === "eng" || l === "en") return "English";
+  if (l === "spa" || l === "es") return "Español";
+  if (l === "fra" || l === "fr") return "Français";
+  if (l === "ita" || l === "it") return "Italiano";
+  if (l === "deu" || l === "ger" || l === "de") return "Deutsch";
+  if (l === "jpn" || l === "ja") return "日本語";
+  return lang;
+}
+
 function srtToVtt(srt: string) {
   const cleaned = srt
     .replace(/\r/g, "")
@@ -222,6 +234,7 @@ export function Player({
   const sourceModeRef = useRef<SourceMode>("webrtc");
   const playIntentRef = useRef<"none" | "auto">("none");
   const preplayCleanupRef = useRef<(() => void) | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const [phase, setPhase] = useState<Phase>("connecting");
   const [sourceMode, setSourceMode] = useState<SourceMode>("webrtc");
   const [statusMsg, setStatusMsg] = useState("Conectando à rede de peers...");
@@ -422,11 +435,11 @@ export function Player({
                   );
                   if (match) setAudioChoice(match.id);
                 }
-              } else {
+              } else if (sourceModeRef.current !== "proxy") {
                 setAudioTracks([]);
               }
             } catch {
-              setAudioTracks([]);
+              if (sourceModeRef.current !== "proxy") setAudioTracks([]);
             }
           };
           video.addEventListener("loadedmetadata", onLoadedMeta, { once: true });
@@ -676,6 +689,113 @@ export function Player({
           };
 
           loadProxySubs();
+
+          const loadProxyTracksViaFfmpeg = async () => {
+            try {
+              const healthRes = await fetch(`${base}/health`);
+              if (!healthRes.ok) return;
+              const health = (await healthRes.json()) as { ffmpegAvailable?: unknown };
+              if (health?.ffmpegAvailable !== true) return;
+
+              const probeRes = await fetch(
+                `${base}/probe?magnet=${encodeURIComponent(item.magnet)}`,
+              );
+              if (!probeRes.ok) return;
+              const probe = (await probeRes.json()) as {
+                audioTracks?: unknown;
+                subtitleTracks?: unknown;
+              };
+
+              const aud = Array.isArray(probe?.audioTracks) ? probe.audioTracks : [];
+              const sub = Array.isArray(probe?.subtitleTracks) ? probe.subtitleTracks : [];
+
+              if (aud.length > 1) {
+                const next = aud
+                  .map((t) => {
+                    const idx =
+                      typeof (t as { index?: unknown }).index === "number"
+                        ? (t as { index: number }).index
+                        : null;
+                    if (idx == null) return null;
+                    const lang =
+                      typeof (t as { lang?: unknown }).lang === "string"
+                        ? (t as { lang: string }).lang
+                        : "und";
+                    const label =
+                      typeof (t as { label?: unknown }).label === "string"
+                        ? (t as { label: string }).label
+                        : lang;
+                    return {
+                      id: `ffmpeg-${String(idx)}`,
+                      lang: String(lang),
+                      label: langLabel(String(label)),
+                    };
+                  })
+                  .filter((t): t is AudioTrackOption => !!t);
+
+                if (!destroyed && next.length > 0) {
+                  setAudioTracks(next);
+                  const pref = safeGetPref(PREF_AUDIO);
+                  if (pref) {
+                    const target = normalizeLang(pref).toLowerCase();
+                    const match = next.find(
+                      (o) =>
+                        normalizeLang(o.lang).toLowerCase() === target ||
+                        normalizeLang(o.lang).toLowerCase().startsWith(`${target}-`),
+                    );
+                    if (match) setAudioChoice(match.id);
+                  }
+                }
+              }
+
+              const nextSubs: SubtitleTrack[] = [];
+
+              for (const t of sub) {
+                const idx =
+                  typeof (t as { index?: unknown }).index === "number"
+                    ? (t as { index: number }).index
+                    : NaN;
+                if (!Number.isFinite(idx) || idx < 0) continue;
+                const id = `ffmpeg-sub-${idx}`;
+
+                const vttRes = await fetch(
+                  `${base}/extract-subtitle?magnet=${encodeURIComponent(item.magnet)}&trackIndex=${idx}`,
+                );
+                if (!vttRes.ok) continue;
+                const vtt = await vttRes.text();
+                if (!vtt) continue;
+                const url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+                objectUrlsRef.current.push(url);
+
+                const lang =
+                  typeof (t as { lang?: unknown }).lang === "string"
+                    ? (t as { lang: string }).lang
+                    : "und";
+                const label =
+                  typeof (t as { label?: unknown }).label === "string"
+                    ? (t as { label: string }).label
+                    : lang;
+                nextSubs.push({
+                  id,
+                  label: langLabel(String(label)),
+                  srcLang: lang || "und",
+                  src: url,
+                });
+              }
+
+              if (!destroyed && nextSubs.length > 0) {
+                setSubtitleTracks((prev) => {
+                  const existing = new Set(prev.map((t) => t.id));
+                  const filtered = nextSubs.filter((t) => !existing.has(t.id));
+                  return filtered.length ? [...prev, ...filtered] : prev;
+                });
+              }
+            } catch {
+              void 0;
+            }
+          };
+
+          void loadProxyTracksViaFfmpeg();
 
           if (!(typeof fileIndex === "number" && Number.isFinite(fileIndex))) {
             const scheduleProxyUpgrade = () => {
@@ -1196,6 +1316,15 @@ export function Player({
       } catch {
         void 0;
       }
+      try {
+        if (audioRef.current) {
+          audioRef.current.pause();
+          audioRef.current.src = "";
+          audioRef.current.load();
+        }
+      } catch {
+        void 0;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.id, fileIndex]);
@@ -1222,6 +1351,11 @@ export function Player({
     if (!video) return;
     const at = (video as VideoWithAudioTracks).audioTracks;
     if (!at || typeof at.length !== "number") return;
+    if (audioChoice.startsWith("ffmpeg-")) {
+      const opt = audioTracks.find((o) => o.id === audioChoice);
+      if (opt) safeSetPref(PREF_AUDIO, opt.lang);
+      return;
+    }
     if (audioChoice === "auto") return;
     const idx = Number(audioChoice);
     if (!Number.isFinite(idx) || idx < 0 || idx >= at.length) return;
@@ -1231,6 +1365,107 @@ export function Player({
     const opt = audioTracks.find((o) => o.id === audioChoice);
     if (opt) safeSetPref(PREF_AUDIO, opt.lang);
   }, [audioChoice, audioTracks]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const audio = audioRef.current;
+    if (!video || !audio) return;
+
+    const isFfmpeg = sourceMode === "proxy" && audioChoice.startsWith("ffmpeg-");
+    const base = proxyBaseRef.current;
+
+    let driftTimer: ReturnType<typeof setInterval> | null = null;
+
+    const cleanup = () => {
+      if (driftTimer) clearInterval(driftTimer);
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+      video.removeEventListener("seeked", onSeeked);
+      try {
+        audio.pause();
+        audio.src = "";
+        audio.load();
+      } catch {
+        void 0;
+      }
+      try {
+        video.muted = false;
+      } catch {
+        void 0;
+      }
+    };
+
+    const onPlay = () => {
+      try {
+        audio.currentTime = video.currentTime ?? 0;
+      } catch {
+        void 0;
+      }
+      try {
+        void audio.play();
+      } catch {
+        void 0;
+      }
+    };
+
+    const onPause = () => {
+      try {
+        audio.pause();
+      } catch {
+        void 0;
+      }
+    };
+
+    const onSeeked = () => {
+      try {
+        audio.currentTime = video.currentTime ?? 0;
+      } catch {
+        void 0;
+      }
+    };
+
+    if (!isFfmpeg || !base) {
+      cleanup();
+      return () => cleanup();
+    }
+
+    const trackIndex = Number(audioChoice.slice("ffmpeg-".length));
+    if (!Number.isFinite(trackIndex) || trackIndex < 0) {
+      cleanup();
+      return () => cleanup();
+    }
+
+    try {
+      video.muted = true;
+    } catch {
+      void 0;
+    }
+
+    try {
+      audio.src = `${base}/extract-audio?magnet=${encodeURIComponent(item.magnet)}&trackIndex=${trackIndex}`;
+      audio.load();
+    } catch {
+      void 0;
+    }
+
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    video.addEventListener("seeked", onSeeked);
+
+    driftTimer = setInterval(() => {
+      try {
+        const vt = video.currentTime ?? 0;
+        const at = audio.currentTime ?? 0;
+        if (Math.abs(vt - at) > 0.3) audio.currentTime = vt;
+      } catch {
+        void 0;
+      }
+    }, 2000);
+
+    if (!video.paused) onPlay();
+
+    return () => cleanup();
+  }, [audioChoice, item.magnet, sourceMode]);
 
   useEffect(() => {
     if (qualityChoice === "auto") {
@@ -1350,6 +1585,8 @@ export function Player({
             </div>
           )}
         </div>
+
+        <audio ref={audioRef} style={{ display: "none" }} />
 
         {settingsOpen && (
           <div className="grid gap-3 md:grid-cols-3 bg-card/60 backdrop-blur rounded-md px-4 py-3 border border-border/40">

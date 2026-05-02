@@ -1,5 +1,25 @@
 import http from "node:http";
+import { execFile, spawn } from "node:child_process";
 import WebTorrent from "webtorrent";
+
+let FFMPEG_AVAILABLE = false;
+
+async function checkFfmpeg() {
+  try {
+    await new Promise((resolve, reject) => {
+      execFile("ffprobe", ["-version"], { timeout: 5000 }, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+    FFMPEG_AVAILABLE = true;
+  } catch {
+    console.warn("[ffmpeg] não encontrado — extração de trilhas desativada");
+    FFMPEG_AVAILABLE = false;
+  }
+}
+
+void checkFfmpeg();
 
 const VIDEO_RE = /\.(mp4|webm|mkv|m4v|mov|avi|ogv|ogg)$/i;
 const NATIVE_PLAYABLE_RE = /\.(mp4|webm|ogv|ogg|m4v)$/i;
@@ -163,6 +183,8 @@ function setCors(res) {
 const client = new WebTorrent({ dht: true });
 const torrents = new Map();
 const torrentMetaCache = new Map();
+const torrentProbeCache = new Map();
+const subtitleExtractCache = new Map();
 
 function getCachedTorrentMeta(magnet) {
   const entry = torrentMetaCache.get(magnet);
@@ -179,6 +201,59 @@ function getCachedTorrentMeta(magnet) {
 
 function setCachedTorrentMeta(magnet, data) {
   torrentMetaCache.set(magnet, { ts: Date.now(), data });
+}
+
+function getMagnetHash(magnet) {
+  try {
+    const url = new URL(magnet);
+    const xt = url.searchParams.get("xt") ?? "";
+    if (xt.startsWith("urn:btih:")) return xt.slice(9).toLowerCase().slice(0, 40);
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+function getCachedProbe(magnet) {
+  const key = getMagnetHash(magnet);
+  if (!key) return null;
+  const entry = torrentProbeCache.get(key);
+  if (!entry) return null;
+  const ts = typeof entry.ts === "number" ? entry.ts : 0;
+  const ttlMs = 30 * 60 * 1000;
+  if (!ts || Date.now() - ts > ttlMs) {
+    torrentProbeCache.delete(key);
+    return null;
+  }
+  return entry.data ?? null;
+}
+
+function setCachedProbe(magnet, data) {
+  const key = getMagnetHash(magnet);
+  if (!key) return;
+  torrentProbeCache.set(key, { ts: Date.now(), data });
+}
+
+function getCachedExtractedSubtitle(magnet, trackIndex) {
+  const key = getMagnetHash(magnet);
+  if (!key) return null;
+  const k = `${key}:${trackIndex}`;
+  const entry = subtitleExtractCache.get(k);
+  if (!entry) return null;
+  const ts = typeof entry.ts === "number" ? entry.ts : 0;
+  const ttlMs = 60 * 60 * 1000;
+  if (!ts || Date.now() - ts > ttlMs) {
+    subtitleExtractCache.delete(k);
+    return null;
+  }
+  return typeof entry.data === "string" ? entry.data : null;
+}
+
+function setCachedExtractedSubtitle(magnet, trackIndex, vtt) {
+  const key = getMagnetHash(magnet);
+  if (!key) return;
+  const k = `${key}:${trackIndex}`;
+  subtitleExtractCache.set(k, { ts: Date.now(), data: vtt });
 }
 
 function cleanupTorrents() {
@@ -231,7 +306,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/health") {
-      sendJson(res, 200, { ok: true });
+      sendJson(res, 200, { ok: true, ffmpegAvailable: FFMPEG_AVAILABLE });
       return;
     }
 
@@ -239,6 +314,9 @@ const server = http.createServer(async (req, res) => {
       url.pathname !== "/stream" &&
       url.pathname !== "/meta" &&
       url.pathname !== "/file" &&
+      url.pathname !== "/probe" &&
+      url.pathname !== "/extract-audio" &&
+      url.pathname !== "/extract-subtitle" &&
       url.pathname !== "/tmdb/search" &&
       url.pathname !== "/tmdb/movie" &&
       url.pathname !== "/tmdb/trending" &&
@@ -582,6 +660,39 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    if (url.pathname === "/probe") {
+      if (!FFMPEG_AVAILABLE) {
+        sendJson(res, 503, { error: "ffmpeg_unavailable" });
+        return;
+      }
+      const cached = getCachedProbe(magnet);
+      if (cached) {
+        sendJson(res, 200, cached);
+        return;
+      }
+    }
+
+    if (url.pathname === "/extract-subtitle") {
+      if (!FFMPEG_AVAILABLE) {
+        sendJson(res, 503, { error: "ffmpeg_unavailable" });
+        return;
+      }
+      const trackIndexRaw = url.searchParams.get("trackIndex") || "";
+      const trackIndex = Number(trackIndexRaw);
+      if (!Number.isFinite(trackIndex) || trackIndex < 0) {
+        sendJson(res, 400, { error: "invalid_track_index" });
+        return;
+      }
+      const cached = getCachedExtractedSubtitle(magnet, trackIndex);
+      if (cached) {
+        res.statusCode = 200;
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("content-type", "text/vtt; charset=utf-8");
+        res.end(cached);
+        return;
+      }
+    }
+
     cleanupTorrents();
 
     let torrent = torrents.get(magnet);
@@ -600,6 +711,249 @@ const server = http.createServer(async (req, res) => {
       await waitForReady(torrent, url.pathname === "/stream" ? 90_000 : 25_000);
     } catch (e) {
       sendJson(res, 504, { error: "metadata_timeout" });
+      return;
+    }
+
+    if (url.pathname === "/probe") {
+      if (!FFMPEG_AVAILABLE) {
+        sendJson(res, 503, { error: "ffmpeg_unavailable" });
+        return;
+      }
+      const cached = getCachedProbe(magnet);
+      if (cached) {
+        sendJson(res, 200, cached);
+        return;
+      }
+
+      const file = pickVideoFile(torrent);
+      if (!file) {
+        sendJson(res, 422, { error: "no_video_file" });
+        return;
+      }
+
+      const proc = spawn(
+        "ffprobe",
+        ["-v", "quiet", "-print_format", "json", "-show_streams", "-i", "pipe:0"],
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+
+      const chunks = [];
+      proc.stdout.on("data", (d) => chunks.push(d));
+      proc.stderr.on("data", () => {});
+
+      const stream = file.createReadStream();
+      stream.on("error", () => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      });
+
+      req.on("close", () => {
+        try {
+          stream.destroy();
+        } catch {}
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      });
+
+      stream.pipe(proc.stdin);
+
+      const code = await new Promise((resolve) => {
+        proc.on("close", (code) => resolve(code ?? 1));
+      });
+
+      if (code !== 0) {
+        sendJson(res, 502, { error: "ffprobe_failed" });
+        return;
+      }
+
+      let parsed = null;
+      try {
+        parsed = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+      } catch {
+        sendJson(res, 502, { error: "ffprobe_invalid_json" });
+        return;
+      }
+
+      const streams = Array.isArray(parsed?.streams) ? parsed.streams : [];
+      const audioTracks = streams
+        .filter((s) => s?.codec_type === "audio")
+        .map((s) => ({
+          index: typeof s.index === "number" ? s.index : null,
+          codec: typeof s.codec_name === "string" ? s.codec_name : null,
+          lang: typeof s.tags?.language === "string" ? s.tags.language : null,
+          label: typeof s.tags?.language === "string" ? s.tags.language : null,
+          channels: typeof s.channels === "number" ? s.channels : null,
+          default: !!s.disposition?.default,
+        }))
+        .filter((t) => typeof t.index === "number");
+
+      const subtitleTracks = streams
+        .filter((s) => s?.codec_type === "subtitle")
+        .map((s) => ({
+          index: typeof s.index === "number" ? s.index : null,
+          codec: typeof s.codec_name === "string" ? s.codec_name : null,
+          lang: typeof s.tags?.language === "string" ? s.tags.language : null,
+          label: typeof s.tags?.language === "string" ? s.tags.language : null,
+          forced: !!s.disposition?.forced,
+        }))
+        .filter((t) => typeof t.index === "number");
+
+      const payload = { audioTracks, subtitleTracks };
+      setCachedProbe(magnet, payload);
+      sendJson(res, 200, payload);
+      return;
+    }
+
+    if (url.pathname === "/extract-audio") {
+      if (!FFMPEG_AVAILABLE) {
+        sendJson(res, 503, { error: "ffmpeg_unavailable" });
+        return;
+      }
+      const trackIndexRaw = url.searchParams.get("trackIndex") || "";
+      const trackIndex = Number(trackIndexRaw);
+      if (!Number.isFinite(trackIndex) || trackIndex < 0) {
+        sendJson(res, 400, { error: "invalid_track_index" });
+        return;
+      }
+
+      const file = pickVideoFile(torrent);
+      if (!file) {
+        sendJson(res, 422, { error: "no_video_file" });
+        return;
+      }
+
+      const proc = spawn(
+        "ffmpeg",
+        [
+          "-i",
+          "pipe:0",
+          "-map",
+          `0:${trackIndex}`,
+          "-vn",
+          "-acodec",
+          "aac",
+          "-b:a",
+          "192k",
+          "-f",
+          "adts",
+          "pipe:1",
+        ],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+
+      res.statusCode = 200;
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("content-type", "audio/aac");
+      res.setHeader("transfer-encoding", "chunked");
+
+      const stream = file.createReadStream();
+      stream.on("error", () => {
+        try {
+          res.destroy();
+        } catch {}
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      });
+
+      req.on("close", () => {
+        try {
+          stream.destroy();
+        } catch {}
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      });
+
+      stream.pipe(proc.stdin);
+      proc.stdout.pipe(res);
+
+      proc.on("close", () => {
+        try {
+          res.end();
+        } catch {}
+      });
+
+      return;
+    }
+
+    if (url.pathname === "/extract-subtitle") {
+      if (!FFMPEG_AVAILABLE) {
+        sendJson(res, 503, { error: "ffmpeg_unavailable" });
+        return;
+      }
+      const trackIndexRaw = url.searchParams.get("trackIndex") || "";
+      const trackIndex = Number(trackIndexRaw);
+      if (!Number.isFinite(trackIndex) || trackIndex < 0) {
+        sendJson(res, 400, { error: "invalid_track_index" });
+        return;
+      }
+
+      const cached = getCachedExtractedSubtitle(magnet, trackIndex);
+      if (cached) {
+        res.statusCode = 200;
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("content-type", "text/vtt; charset=utf-8");
+        res.end(cached);
+        return;
+      }
+
+      const file = pickVideoFile(torrent);
+      if (!file) {
+        sendJson(res, 422, { error: "no_video_file" });
+        return;
+      }
+
+      const proc = spawn(
+        "ffmpeg",
+        ["-i", "pipe:0", "-map", `0:${trackIndex}`, "-f", "webvtt", "pipe:1"],
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+
+      const chunks = [];
+      proc.stdout.on("data", (d) => chunks.push(d));
+      proc.stderr.on("data", () => {});
+
+      const stream = file.createReadStream();
+      stream.on("error", () => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      });
+
+      req.on("close", () => {
+        try {
+          stream.destroy();
+        } catch {}
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      });
+
+      stream.pipe(proc.stdin);
+
+      const code = await new Promise((resolve) => {
+        proc.on("close", (code) => resolve(code ?? 1));
+      });
+
+      if (code !== 0) {
+        sendJson(res, 502, { error: "ffmpeg_failed" });
+        return;
+      }
+
+      const vtt = Buffer.concat(chunks).toString("utf-8");
+      setCachedExtractedSubtitle(magnet, trackIndex, vtt);
+
+      res.statusCode = 200;
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("content-type", "text/vtt; charset=utf-8");
+      res.end(vtt);
       return;
     }
 
