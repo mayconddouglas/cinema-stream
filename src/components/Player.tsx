@@ -65,6 +65,39 @@ function getInfoHashFromMagnet(magnet: string) {
   }
 }
 
+function getMagnetHash(magnet: string) {
+  const infoHash = getInfoHashFromMagnet(magnet);
+  return infoHash ? infoHash.slice(0, 40) : "";
+}
+
+function getCachedMeta(magnet: string) {
+  const hash = getMagnetHash(magnet);
+  if (!hash) return null;
+  const key = `buffet_meta_${hash}`;
+  const ttlMs = 24 * 60 * 60 * 1000;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { ts?: unknown; data?: unknown };
+    const ts = typeof parsed.ts === "number" ? parsed.ts : 0;
+    if (!ts || Date.now() - ts > ttlMs) return null;
+    return parsed.data as ProxyMeta;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedMeta(magnet: string, data: ProxyMeta) {
+  const hash = getMagnetHash(magnet);
+  if (!hash) return;
+  const key = `buffet_meta_${hash}`;
+  try {
+    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
+  } catch {
+    void 0;
+  }
+}
+
 function getBufferedAheadSeconds(video: HTMLVideoElement) {
   const t = video.currentTime ?? 0;
   try {
@@ -511,9 +544,19 @@ export function Player({
               setSubtitleTracks([]);
               setSubtitleChoice("off");
 
-              const metaRes = await fetch(`${base}/meta?magnet=${encodeURIComponent(item.magnet)}`);
-              if (!metaRes.ok) return;
-              const meta = (await metaRes.json()) as ProxyMeta;
+              const cached = getCachedMeta(item.magnet);
+              const meta =
+                cached ??
+                (await (async () => {
+                  const metaRes = await fetch(
+                    `${base}/meta?magnet=${encodeURIComponent(item.magnet)}`,
+                  );
+                  if (!metaRes.ok) return null;
+                  const meta = (await metaRes.json()) as ProxyMeta;
+                  setCachedMeta(item.magnet, meta);
+                  return meta;
+                })());
+              if (!meta) return;
               const files = Array.isArray(meta?.files) ? meta.files : [];
               const videos = files
                 .filter((f) => f.kind === "video")
@@ -574,17 +617,40 @@ export function Player({
               const prefNorm = prefSubs ? normalizeLang(prefSubs).toLowerCase() : "";
 
               const nextTracks: SubtitleTrack[] = [];
+              const magnetHash = getMagnetHash(item.magnet);
               for (const s of subs.slice(0, 10)) {
                 const name = String(s.name || "");
                 const idx = Number(s.index);
                 const langGuess = s.lang ? String(s.lang) : guessLangFromName(name).lang;
                 const label = s.label ? String(s.label) : guessLangFromName(name).label;
-                const fileRes = await fetch(
-                  `${base}/file?magnet=${encodeURIComponent(item.magnet)}&index=${idx}`,
-                );
-                if (!fileRes.ok) continue;
-                const text = await fileRes.text();
-                const vtt = name.toLowerCase().endsWith(".srt") ? srtToVtt(text) : text;
+                const subKey = magnetHash ? `buffet_sub_${magnetHash}_${idx}` : "";
+                const cached = (() => {
+                  if (!subKey) return "";
+                  try {
+                    return sessionStorage.getItem(subKey) ?? "";
+                  } catch {
+                    return "";
+                  }
+                })();
+                const vtt = cached
+                  ? cached
+                  : await (async () => {
+                      const fileRes = await fetch(
+                        `${base}/file?magnet=${encodeURIComponent(item.magnet)}&index=${idx}`,
+                      );
+                      if (!fileRes.ok) return "";
+                      const text = await fileRes.text();
+                      const vtt = name.toLowerCase().endsWith(".srt") ? srtToVtt(text) : text;
+                      if (subKey) {
+                        try {
+                          sessionStorage.setItem(subKey, vtt);
+                        } catch {
+                          void 0;
+                        }
+                      }
+                      return vtt;
+                    })();
+                if (!vtt) continue;
                 const url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
                 objectUrlsRef.current.push(url);
                 nextTracks.push({
@@ -995,6 +1061,7 @@ export function Player({
               const prefNorm = pref ? normalizeLang(pref).toLowerCase() : "";
 
               const nextTracks: SubtitleTrack[] = [];
+              const magnetHash = getMagnetHash(item.magnet);
               const getBuffer = (f: TorrentFile) =>
                 new Promise<Uint8Array>((resolve, reject) => {
                   f.getBuffer((err, buf) => {
@@ -1004,9 +1071,32 @@ export function Player({
                 });
 
               for (const s of subs.slice(0, 10)) {
-                const buf = await getBuffer(s);
-                const text = new TextDecoder().decode(buf);
-                const vtt = s.name.toLowerCase().endsWith(".srt") ? srtToVtt(text) : text;
+                const idx = t.files.indexOf(s);
+                const subKey = magnetHash && idx >= 0 ? `buffet_sub_${magnetHash}_${idx}` : "";
+                const cached = (() => {
+                  if (!subKey) return "";
+                  try {
+                    return sessionStorage.getItem(subKey) ?? "";
+                  } catch {
+                    return "";
+                  }
+                })();
+
+                const vtt = cached
+                  ? cached
+                  : await (async () => {
+                      const buf = await getBuffer(s);
+                      const text = new TextDecoder().decode(buf);
+                      const vtt = s.name.toLowerCase().endsWith(".srt") ? srtToVtt(text) : text;
+                      if (subKey) {
+                        try {
+                          sessionStorage.setItem(subKey, vtt);
+                        } catch {
+                          void 0;
+                        }
+                      }
+                      return vtt;
+                    })();
                 const url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
                 objectUrlsRef.current.push(url);
                 const lang = guessLangFromName(String(s.name));

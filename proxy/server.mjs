@@ -162,6 +162,24 @@ function setCors(res) {
 
 const client = new WebTorrent({ dht: true });
 const torrents = new Map();
+const torrentMetaCache = new Map();
+
+function getCachedTorrentMeta(magnet) {
+  const entry = torrentMetaCache.get(magnet);
+  if (!entry) return null;
+  const ts = typeof entry.ts === "number" ? entry.ts : 0;
+  if (!ts) return null;
+  const ttlMs = 30 * 60 * 1000;
+  if (Date.now() - ts > ttlMs) {
+    torrentMetaCache.delete(magnet);
+    return null;
+  }
+  return entry.data ?? null;
+}
+
+function setCachedTorrentMeta(magnet, data) {
+  torrentMetaCache.set(magnet, { ts: Date.now(), data });
+}
 
 function cleanupTorrents() {
   const now = Date.now();
@@ -556,6 +574,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/meta") {
+      const cached = getCachedTorrentMeta(magnet);
+      if (cached) {
+        sendJson(res, 200, cached);
+        return;
+      }
+    }
+
     cleanupTorrents();
 
     let torrent = torrents.get(magnet);
@@ -596,7 +622,9 @@ const server = http.createServer(async (req, res) => {
       const bestVideoIndex = video
         ? (files.find((x) => x.kind === "video" && x.name === video.name)?.index ?? null)
         : null;
-      sendJson(res, 200, { bestVideoIndex, files });
+      const payload = { bestVideoIndex, files };
+      setCachedTorrentMeta(magnet, payload);
+      sendJson(res, 200, payload);
       return;
     }
 
