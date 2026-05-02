@@ -41,6 +41,12 @@ type ProxyMeta = {
   files: ProxyMetaFile[];
 };
 
+type StreamAudioOption = {
+  id: string;
+  label: string;
+  audioTrack: number;
+};
+
 function getInfoHashFromMagnet(magnet: string) {
   try {
     const url = new URL(magnet);
@@ -231,6 +237,7 @@ export function Player({
   const preplayCleanupRef = useRef<(() => void) | null>(null);
   const isTransmuxedRef = useRef(false);
   const ffmpegAvailableRef = useRef<boolean | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const [phase, setPhase] = useState<Phase>("connecting");
   const [sourceMode, setSourceMode] = useState<SourceMode>("webrtc");
   const [statusMsg, setStatusMsg] = useState("Conectando à rede de peers...");
@@ -243,6 +250,8 @@ export function Player({
   const [preplayBuffered, setPreplayBuffered] = useState(0);
   const [videoSrc, setVideoSrc] = useState<string>("");
   const [isTransmuxed, setIsTransmuxed] = useState(false);
+  const [audioTracks, setAudioTracks] = useState<StreamAudioOption[]>([]);
+  const [audioChoice, setAudioChoice] = useState("native");
   const [stats, setStats] = useState<Stats>({
     downloadSpeed: 0,
     uploadSpeed: 0,
@@ -265,10 +274,22 @@ export function Player({
   }, [sourceMode]);
 
   useEffect(() => {
+    const audioForReset = audioRef.current;
     setPreplayActive(false);
     setPreplayBuffered(0);
     setIsTransmuxed(false);
     isTransmuxedRef.current = false;
+    setAudioTracks([]);
+    setAudioChoice("native");
+    try {
+      if (audioForReset) {
+        audioForReset.pause();
+        audioForReset.src = "";
+        audioForReset.load();
+      }
+    } catch {
+      void 0;
+    }
   }, [item.id, sourceMode]);
 
   useEffect(() => {
@@ -572,7 +593,40 @@ export function Player({
 
               const aud = Array.isArray(probe?.audioTracks) ? probe.audioTracks : [];
               const sub = Array.isArray(probe?.subtitleTracks) ? probe.subtitleTracks : [];
-              void aud;
+
+              const audioStreams = aud
+                .map((t) => {
+                  const lang =
+                    typeof (t as { lang?: unknown }).lang === "string"
+                      ? (t as { lang: string }).lang
+                      : "und";
+                  const label =
+                    typeof (t as { label?: unknown }).label === "string"
+                      ? (t as { label: string }).label
+                      : lang;
+                  const idx =
+                    typeof (t as { index?: unknown }).index === "number"
+                      ? (t as { index: number }).index
+                      : null;
+                  if (idx == null) return null;
+                  return { idx, lang: String(lang), label: String(label) };
+                })
+                .filter((t): t is { idx: number; lang: string; label: string } => !!t)
+                .sort((a, b) => a.idx - b.idx);
+
+              if (!destroyed && audioStreams.length > 1) {
+                const options: StreamAudioOption[] = audioStreams
+                  .map((t, i) => ({
+                    id: `stream-audio-${i}`,
+                    audioTrack: i,
+                    label: langLabel(t.label),
+                  }))
+                  .filter((t) => t.audioTrack > 0);
+                setAudioTracks(options);
+              } else if (!destroyed) {
+                setAudioTracks([]);
+                setAudioChoice("native");
+              }
 
               for (const t of sub) {
                 const idx =
@@ -1074,6 +1128,7 @@ export function Player({
     start();
 
     const playerForCleanup = playerRef.current;
+    const audioForCleanup = audioRef.current;
 
     return () => {
       destroyed = true;
@@ -1108,6 +1163,15 @@ export function Player({
       } catch {
         void 0;
       }
+      try {
+        if (audioForCleanup) {
+          audioForCleanup.pause();
+          audioForCleanup.src = "";
+          audioForCleanup.load();
+        }
+      } catch {
+        void 0;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.id, fileIndex]);
@@ -1134,6 +1198,108 @@ export function Player({
       void webrtcSwitchRef.current(opt.id);
     }
   }, [qualityChoice, qualityOptions, sourceMode]);
+
+  useEffect(() => {
+    const video = (playerRef.current?.el as HTMLVideoElement | null) ?? videoRef.current;
+    const audio = audioRef.current;
+    if (!video || !audio) return;
+
+    const base = proxyBaseRef.current;
+    const isAltAudio =
+      sourceMode === "proxy" && isTransmuxed && audioChoice.startsWith("stream-audio-");
+
+    let driftTimer: ReturnType<typeof setInterval> | null = null;
+
+    const cleanup = () => {
+      if (driftTimer) clearInterval(driftTimer);
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+      video.removeEventListener("seeked", onSeeked);
+      try {
+        audio.pause();
+        audio.src = "";
+        audio.load();
+      } catch {
+        void 0;
+      }
+      try {
+        video.muted = false;
+      } catch {
+        void 0;
+      }
+    };
+
+    const onPlay = () => {
+      try {
+        audio.currentTime = video.currentTime ?? 0;
+      } catch {
+        void 0;
+      }
+      try {
+        void audio.play();
+      } catch {
+        void 0;
+      }
+    };
+
+    const onPause = () => {
+      try {
+        audio.pause();
+      } catch {
+        void 0;
+      }
+    };
+
+    const onSeeked = () => {
+      try {
+        audio.currentTime = video.currentTime ?? 0;
+      } catch {
+        void 0;
+      }
+    };
+
+    if (!isAltAudio || !base) {
+      cleanup();
+      return () => cleanup();
+    }
+
+    const audioTrack = Number(audioChoice.slice("stream-audio-".length));
+    if (!Number.isFinite(audioTrack) || audioTrack <= 0) {
+      cleanup();
+      return () => cleanup();
+    }
+
+    try {
+      video.muted = true;
+    } catch {
+      void 0;
+    }
+
+    try {
+      audio.src = `${base}/stream-audio?magnet=${encodeURIComponent(item.magnet)}&audioTrack=${audioTrack}`;
+      audio.load();
+    } catch {
+      void 0;
+    }
+
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    video.addEventListener("seeked", onSeeked);
+
+    driftTimer = setInterval(() => {
+      try {
+        const vt = video.currentTime ?? 0;
+        const at = audio.currentTime ?? 0;
+        if (Math.abs(vt - at) > 0.3) audio.currentTime = vt;
+      } catch {
+        void 0;
+      }
+    }, 2000);
+
+    if (!video.paused) onPlay();
+
+    return () => cleanup();
+  }, [audioChoice, isTransmuxed, item.magnet, sourceMode]);
 
   const getVideoEl = () => (playerRef.current?.el as HTMLVideoElement | null) ?? videoRef.current;
 
@@ -1329,6 +1495,8 @@ export function Player({
         </div>
       </div>
 
+      <audio ref={audioRef} style={{ display: "none" }} />
+
       <div className="w-full max-w-6xl flex flex-wrap items-center gap-4 text-xs text-muted-foreground bg-card/60 backdrop-blur rounded-md px-4 py-3 border border-border/40 mt-2">
         <Stat
           icon={<Download className="h-3.5 w-3.5 text-primary" />}
@@ -1355,6 +1523,23 @@ export function Player({
             )
           }
         />
+        {sourceMode === "proxy" && isTransmuxed && audioTracks.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-muted-foreground">Áudio</span>
+            <select
+              value={audioChoice}
+              onChange={(e) => setAudioChoice(e.target.value)}
+              className="h-8 rounded-md bg-background/60 border border-border/40 px-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="native">Padrão</option>
+              {audioTracks.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="flex-1 min-w-[140px]">
           <div className="flex items-center justify-between mb-1">
             <span>Buffer</span>
