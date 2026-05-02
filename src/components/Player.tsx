@@ -65,6 +65,21 @@ function getInfoHashFromMagnet(magnet: string) {
   }
 }
 
+function getBufferedAheadSeconds(video: HTMLVideoElement) {
+  const t = video.currentTime ?? 0;
+  try {
+    const ranges = video.buffered;
+    for (let i = 0; i < ranges.length; i++) {
+      const start = ranges.start(i);
+      const end = ranges.end(i);
+      if (t >= start && t <= end) return Math.max(0, end - t);
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
 function formatBytes(bytes: number, perSecond = false) {
   const suffix = perSecond ? "/s" : "";
   if (bytes < 1024) return `${bytes.toFixed(0)} B${suffix}`;
@@ -172,6 +187,8 @@ export function Player({
   const webrtcQualityIdRef = useRef<string | null>(null);
   const forceProxyRef = useRef<(() => void) | null>(null);
   const sourceModeRef = useRef<SourceMode>("webrtc");
+  const playIntentRef = useRef<"none" | "auto">("none");
+  const preplayCleanupRef = useRef<(() => void) | null>(null);
   const [phase, setPhase] = useState<Phase>("connecting");
   const [sourceMode, setSourceMode] = useState<SourceMode>("webrtc");
   const [statusMsg, setStatusMsg] = useState("Conectando à rede de peers...");
@@ -185,6 +202,8 @@ export function Player({
   const [qualityOptions, setQualityOptions] = useState<QualityOption[]>([]);
   const [qualityChoice, setQualityChoice] = useState<string>("auto");
   const [showForceProxy, setShowForceProxy] = useState(false);
+  const [preplayActive, setPreplayActive] = useState(false);
+  const [preplayBuffered, setPreplayBuffered] = useState(0);
   const [stats, setStats] = useState<Stats>({
     downloadSpeed: 0,
     uploadSpeed: 0,
@@ -205,6 +224,11 @@ export function Player({
   useEffect(() => {
     sourceModeRef.current = sourceMode;
   }, [sourceMode]);
+
+  useEffect(() => {
+    setPreplayActive(false);
+    setPreplayBuffered(0);
+  }, [item.id, sourceMode]);
 
   useEffect(() => {
     setShowForceProxy(false);
@@ -244,6 +268,11 @@ export function Player({
             void 0;
           }
 
+          if (preplayCleanupRef.current) {
+            preplayCleanupRef.current();
+            preplayCleanupRef.current = null;
+          }
+
           plyrRef.current = new Plyr(video, {
             controls: [
               "play-large",
@@ -276,6 +305,67 @@ export function Player({
                 void 0;
               }
             }
+
+            if (playIntentRef.current === "auto") return;
+
+            setPreplayActive(true);
+            setPreplayBuffered(0);
+
+            let done = false;
+            const startedAt = Date.now();
+
+            const cleanup = () => {
+              done = true;
+              video.removeEventListener("progress", onProgress);
+              video.removeEventListener("timeupdate", onProgress);
+              if (timer) clearInterval(timer);
+              if (bypass) clearTimeout(bypass);
+            };
+            preplayCleanupRef.current = cleanup;
+
+            const check = () => {
+              const bufferedAhead = getBufferedAheadSeconds(video);
+              setPreplayBuffered(bufferedAhead);
+              if (bufferedAhead >= 15) {
+                cleanup();
+                setPreplayActive(false);
+                try {
+                  void video.play();
+                } catch {
+                  void 0;
+                }
+                return;
+              }
+              if (Date.now() - startedAt >= 20_000) {
+                cleanup();
+                setPreplayActive(false);
+                setWarning((prev) =>
+                  prev
+                    ? `${prev} · Conexão lenta — podem ocorrer pausas`
+                    : "Conexão lenta — podem ocorrer pausas",
+                );
+                try {
+                  void video.play();
+                } catch {
+                  void 0;
+                }
+              }
+            };
+
+            const onProgress = () => {
+              if (done) return;
+              check();
+            };
+
+            const timer = setInterval(check, 500);
+            const bypass = setTimeout(() => {
+              if (done) return;
+              check();
+            }, 20_000);
+
+            video.addEventListener("progress", onProgress);
+            video.addEventListener("timeupdate", onProgress);
+            check();
 
             try {
               const at = (video as VideoWithAudioTracks).audioTracks;
@@ -382,6 +472,7 @@ export function Player({
                 return true;
               }
             })();
+            playIntentRef.current = paused ? "none" : "auto";
 
             video.removeAttribute("src");
             video.load();
@@ -403,6 +494,7 @@ export function Player({
                   void 0;
                 }
               }
+              playIntentRef.current = "none";
             };
             video.addEventListener("loadedmetadata", onMeta);
           };
@@ -756,6 +848,7 @@ export function Player({
                 return true;
               }
             })();
+            playIntentRef.current = paused ? "none" : "auto";
 
             currentFile = targetFile;
             webrtcQualityIdRef.current = target.id;
@@ -806,6 +899,7 @@ export function Player({
                   void 0;
                 }
               }
+              playIntentRef.current = "none";
             };
             video.addEventListener("loadedmetadata", onMeta, { once: true });
           };
@@ -985,6 +1079,10 @@ export function Player({
       if (qualityTimerRef.current) clearTimeout(qualityTimerRef.current);
       proxySwitchRef.current = null;
       webrtcSwitchRef.current = null;
+      if (preplayCleanupRef.current) {
+        preplayCleanupRef.current();
+        preplayCleanupRef.current = null;
+      }
       try {
         if (plyrRef.current) {
           const ct = plyrRef.current.currentTime;
@@ -1067,7 +1165,7 @@ export function Player({
     }
   }, [qualityChoice, qualityOptions, sourceMode]);
 
-  const showOverlay = phase !== "ready";
+  const showOverlay = phase !== "ready" || preplayActive;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-4 animate-scale-in">
@@ -1107,18 +1205,37 @@ export function Player({
 
           {showOverlay && phase !== "error" && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 p-6 text-center">
-              <Loader2 className="h-10 w-10 text-primary animate-spin" />
-              <p className="text-sm text-cream font-medium">{statusMsg}</p>
-              {showForceProxy &&
-                sourceMode === "webrtc" &&
-                (phase === "connecting" || phase === "buffering") && (
-                  <button
-                    onClick={() => forceProxyRef.current?.()}
-                    className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-glow hover:brightness-110 transition"
-                  >
-                    Usar servidor proxy
-                  </button>
-                )}
+              {preplayActive ? (
+                <>
+                  <p className="text-sm text-cream font-medium">
+                    Preparando reprodução... {Math.min(15, Math.floor(preplayBuffered))} seg
+                    buffered
+                  </p>
+                  <div className="w-full max-w-sm">
+                    <div className="h-1.5 rounded-full bg-white/15 overflow-hidden">
+                      <div
+                        className="h-full bg-amber-400 transition-[width] duration-300"
+                        style={{ width: `${Math.min(100, (preplayBuffered / 15) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Loader2 className="h-10 w-10 text-primary animate-spin" />
+                  <p className="text-sm text-cream font-medium">{statusMsg}</p>
+                  {showForceProxy &&
+                    sourceMode === "webrtc" &&
+                    (phase === "connecting" || phase === "buffering") && (
+                      <button
+                        onClick={() => forceProxyRef.current?.()}
+                        className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-glow hover:brightness-110 transition"
+                      >
+                        Usar servidor proxy
+                      </button>
+                    )}
+                </>
+              )}
               <div className="text-xs text-muted-foreground space-y-1">
                 {sourceMode === "proxy" ? (
                   <p>Modo: Proxy</p>
@@ -1135,7 +1252,6 @@ export function Player({
               </div>
             </div>
           )}
-
           {phase === "error" && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/95 p-6 text-center">
               <AlertCircle className="h-10 w-10 text-destructive" />
