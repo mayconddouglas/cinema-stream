@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { X, Download, Upload, Users, Loader2, AlertCircle, Settings } from "lucide-react";
+import type { Torrent, TorrentFile, WebTorrentClient } from "webtorrent/dist/webtorrent.min.js";
 import type { LibraryItem } from "@/lib/storage";
-import { update } from "@/lib/storage";
 
 type Stats = {
   downloadSpeed: number;
@@ -34,6 +34,25 @@ type QualityOption = {
   resolution: number;
   index: number;
 };
+
+type ProxyMetaFile = {
+  index: number;
+  name: string;
+  length: number;
+  kind: "video" | "subtitle" | "other";
+  resolution: number | null;
+  lang: string | null;
+  label: string | null;
+};
+
+type ProxyMeta = {
+  bestVideoIndex: number | null;
+  files: ProxyMetaFile[];
+};
+
+type AudioTrackLike = { enabled: boolean; language?: string; label?: string };
+type AudioTrackListLike = { length: number; [i: number]: AudioTrackLike };
+type VideoWithAudioTracks = HTMLVideoElement & { audioTracks?: AudioTrackListLike };
 
 function formatBytes(bytes: number, perSecond = false) {
   const suffix = perSecond ? "/s" : "";
@@ -105,22 +124,31 @@ function safeGetPref(key: string) {
 function safeSetPref(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
-  } catch {}
+  } catch {
+    void 0;
+  }
 }
 
 export function Player({
   item,
+  fileIndex,
   onClose,
   onProgress,
 }: {
   item: LibraryItem;
+  fileIndex?: number;
   onClose: () => void;
-  onProgress: (id: string, patch: Partial<LibraryItem>) => void;
+  onProgress: (
+    id: string,
+    patch: { progress?: number; duration?: number; lastPlayedAt?: number },
+  ) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const plyrRef = useRef<any>(null);
-  const clientRef = useRef<any>(null);
-  const torrentRef = useRef<any>(null);
+  const plyrRef = useRef<{ destroy: () => void; currentTime: number; duration: number } | null>(
+    null,
+  );
+  const clientRef = useRef<WebTorrentClient | null>(null);
+  const torrentRef = useRef<Torrent | null>(null);
   const proxyStartedRef = useRef(false);
   const objectUrlsRef = useRef<string[]>([]);
   const qualityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -171,17 +199,25 @@ export function Player({
       try {
         // Dynamic imports — must stay client-side only (Plyr/WebTorrent both touch `document`/`window`)
         const [{ default: WebTorrent }, PlyrMod] = await Promise.all([
-          import("webtorrent/dist/webtorrent.min.js"),
-          import("plyr"),
+          import("webtorrent/dist/webtorrent.min.js") as Promise<{
+            default: new (opts?: unknown) => WebTorrentClient;
+          }>,
+          import("plyr") as Promise<{ default?: unknown }>,
         ]);
         if (destroyed) return;
 
-        const Plyr: any = (PlyrMod as any).default ?? PlyrMod;
+        const PlyrCtorUnknown = PlyrMod.default ?? PlyrMod;
+        const Plyr = PlyrCtorUnknown as unknown as new (
+          el: HTMLVideoElement,
+          opts: unknown,
+        ) => { destroy: () => void; currentTime: number; duration: number };
 
         const initVideoUi = (video: HTMLVideoElement) => {
           try {
             if (plyrRef.current) plyrRef.current.destroy();
-          } catch {}
+          } catch {
+            void 0;
+          }
 
           plyrRef.current = new Plyr(video, {
             controls: [
@@ -207,11 +243,13 @@ export function Player({
             if (item.progress && item.progress > 5 && item.duration) {
               try {
                 video.currentTime = item.progress;
-              } catch {}
+              } catch {
+                void 0;
+              }
             }
 
             try {
-              const at: any = (video as any).audioTracks;
+              const at = (video as VideoWithAudioTracks).audioTracks;
               if (at && typeof at.length === "number") {
                 const opts: AudioTrackOption[] = [];
                 for (let i = 0; i < at.length; i++) {
@@ -226,7 +264,9 @@ export function Player({
                 if (pref) {
                   const target = normalizeLang(pref).toLowerCase();
                   const match = opts.find(
-                    (o) => o.lang.toLowerCase() === target || o.lang.toLowerCase().startsWith(`${target}-`),
+                    (o) =>
+                      o.lang.toLowerCase() === target ||
+                      o.lang.toLowerCase().startsWith(`${target}-`),
                   );
                   if (match) setAudioChoice(match.id);
                 }
@@ -247,7 +287,7 @@ export function Player({
               3: "MEDIA_ERR_DECODE — formato/codec não suportado pelo navegador",
               4: "MEDIA_ERR_SRC_NOT_SUPPORTED — formato/codec não suportado pelo navegador",
             };
-            const reason = me ? codeMap[me.code] ?? `código ${me.code}` : "desconhecido";
+            const reason = me ? (codeMap[me.code] ?? `código ${me.code}`) : "desconhecido";
             console.error("[Video] error:", reason, me);
             setPhase("error");
             setError(`Erro de reprodução: ${reason}. Tente um torrent em MP4 (H.264 + AAC).`);
@@ -270,11 +310,14 @@ export function Player({
 
           try {
             if (clientRef.current) clientRef.current.destroy();
-          } catch {}
+          } catch {
+            void 0;
+          }
           clientRef.current = null;
           torrentRef.current = null;
 
-          const proxyBase = (import.meta as any).env?.VITE_TORRENT_PROXY_URL as string | undefined;
+          const env = (import.meta as unknown as { env?: { VITE_TORRENT_PROXY_URL?: string } }).env;
+          const proxyBase = env?.VITE_TORRENT_PROXY_URL;
           const base = typeof proxyBase === "string" ? proxyBase.trim().replace(/\/+$/, "") : "";
           if (!base) {
             setPhase("error");
@@ -321,11 +364,15 @@ export function Player({
               video.removeEventListener("loadedmetadata", onMeta);
               try {
                 if (ct && Number.isFinite(ct)) video.currentTime = ct;
-              } catch {}
+              } catch {
+                void 0;
+              }
               if (!paused) {
                 try {
                   void video.play();
-                } catch {}
+                } catch {
+                  void 0;
+                }
               }
             };
             video.addEventListener("loadedmetadata", onMeta);
@@ -337,56 +384,69 @@ export function Player({
               try {
                 objectUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
                 objectUrlsRef.current = [];
-              } catch {}
+              } catch {
+                void 0;
+              }
               setSubtitleTracks([]);
               setSubtitleChoice("off");
 
               const metaRes = await fetch(`${base}/meta?magnet=${encodeURIComponent(item.magnet)}`);
               if (!metaRes.ok) return;
-              const meta = (await metaRes.json()) as any;
+              const meta = (await metaRes.json()) as ProxyMeta;
               const files = Array.isArray(meta?.files) ? meta.files : [];
               const videos = files
-                .filter((f: any) => f?.kind === "video" && typeof f?.index === "number")
-                .map((f: any) => {
-                  const name = String(f?.name ?? "");
-                  const res = typeof f?.resolution === "number" ? f.resolution : parseResolutionFromName(name);
+                .filter((f) => f.kind === "video")
+                .map((f) => {
+                  const name = String(f.name ?? "");
+                  const res =
+                    typeof f.resolution === "number" ? f.resolution : parseResolutionFromName(name);
                   return {
                     id: String(f.index),
                     label: res ? `${res}p` : name || `Arquivo ${Number(f.index) + 1}`,
                     resolution: res || 0,
                     index: Number(f.index),
-                    length: typeof f?.length === "number" ? f.length : 0,
+                    length: typeof f.length === "number" ? f.length : 0,
                   };
                 })
-                .sort((a: any, b: any) => {
+                .sort((a, b) => {
                   if (a.resolution && b.resolution) return a.resolution - b.resolution;
                   if (a.resolution) return -1;
                   if (b.resolution) return 1;
                   return (a.length || 0) - (b.length || 0);
                 });
 
-              const opts: QualityOption[] = videos.map((v: any) => ({
+              const opts: QualityOption[] = videos.map((v) => ({
                 id: v.id,
                 label: v.label,
                 resolution: v.resolution,
                 index: v.index,
               }));
-              if (!destroyed) setQualityOptions(opts);
-
-              const pref = safeGetPref(PREF_QUALITY);
-              const prefRes = pref ? Number(pref) : 0;
-              const initial =
-                (prefRes ? opts.find((o) => o.resolution === prefRes) : null) ??
-                (opts.length ? opts[0] : null) ??
-                null;
-
-              if (initial) {
-                proxyQualityIndexRef.current = initial.index;
-                await switchProxyVideo(initial.index);
-                if (!destroyed && prefRes) setQualityChoice(initial.id);
+              if (typeof fileIndex === "number" && Number.isFinite(fileIndex)) {
+                const only = opts.find((o) => o.index === fileIndex);
+                if (!destroyed) setQualityOptions(only ? [only] : []);
+              } else {
+                if (!destroyed) setQualityOptions(opts);
               }
 
-              const subs = files.filter((f: any) => f?.kind === "subtitle" && typeof f?.index === "number");
+              if (typeof fileIndex === "number" && Number.isFinite(fileIndex)) {
+                proxyQualityIndexRef.current = fileIndex;
+                await switchProxyVideo(fileIndex);
+              } else {
+                const pref = safeGetPref(PREF_QUALITY);
+                const prefRes = pref ? Number(pref) : 0;
+                const initial =
+                  (prefRes ? opts.find((o) => o.resolution === prefRes) : null) ??
+                  (opts.length ? opts[0] : null) ??
+                  null;
+
+                if (initial) {
+                  proxyQualityIndexRef.current = initial.index;
+                  await switchProxyVideo(initial.index);
+                  if (!destroyed && prefRes) setQualityChoice(initial.id);
+                }
+              }
+
+              const subs = files.filter((f) => f.kind === "subtitle");
               if (subs.length === 0) return;
 
               const prefSubs = safeGetPref(PREF_SUBS);
@@ -398,7 +458,9 @@ export function Player({
                 const idx = Number(s.index);
                 const langGuess = s.lang ? String(s.lang) : guessLangFromName(name).lang;
                 const label = s.label ? String(s.label) : guessLangFromName(name).label;
-                const fileRes = await fetch(`${base}/file?magnet=${encodeURIComponent(item.magnet)}&index=${idx}`);
+                const fileRes = await fetch(
+                  `${base}/file?magnet=${encodeURIComponent(item.magnet)}&index=${idx}`,
+                );
                 if (!fileRes.ok) continue;
                 const text = await fileRes.text();
                 const vtt = name.toLowerCase().endsWith(".srt") ? srtToVtt(text) : text;
@@ -421,42 +483,46 @@ export function Player({
                 );
                 if (match) setSubtitleChoice(match.id);
               }
-            } catch {}
+            } catch {
+              void 0;
+            }
           };
 
           loadProxySubs();
 
-          const scheduleProxyUpgrade = () => {
-            if (qualityTimerRef.current) clearTimeout(qualityTimerRef.current);
-            qualityTimerRef.current = setTimeout(async () => {
-              if (destroyed) return;
-              if (qualityChoiceRef.current !== "auto") return;
-              if (proxyQualityIndexRef.current == null) return;
+          if (!(typeof fileIndex === "number" && Number.isFinite(fileIndex))) {
+            const scheduleProxyUpgrade = () => {
+              if (qualityTimerRef.current) clearTimeout(qualityTimerRef.current);
+              qualityTimerRef.current = setTimeout(async () => {
+                if (destroyed) return;
+                if (qualityChoiceRef.current !== "auto") return;
+                if (proxyQualityIndexRef.current == null) return;
 
-              const opts = qualityOptionsRef.current;
-              const idx = opts.findIndex((o) => o.index === proxyQualityIndexRef.current);
-              if (idx < 0) return;
-              const next = opts[idx + 1];
-              if (!next) return;
+                const opts = qualityOptionsRef.current;
+                const idx = opts.findIndex((o) => o.index === proxyQualityIndexRef.current);
+                if (idx < 0) return;
+                const next = opts[idx + 1];
+                if (!next) return;
 
-              try {
-                const t = video.currentTime ?? 0;
-                const can = video.readyState >= 2 && t >= 15;
-                if (!can) {
+                try {
+                  const t = video.currentTime ?? 0;
+                  const can = video.readyState >= 2 && t >= 15;
+                  if (!can) {
+                    scheduleProxyUpgrade();
+                    return;
+                  }
+                } catch {
                   scheduleProxyUpgrade();
                   return;
                 }
-              } catch {
-                scheduleProxyUpgrade();
-                return;
-              }
 
-              proxyQualityIndexRef.current = next.index;
-              await switchProxyVideo(next.index);
-              scheduleProxyUpgrade();
-            }, 45_000);
-          };
-          scheduleProxyUpgrade();
+                proxyQualityIndexRef.current = next.index;
+                await switchProxyVideo(next.index);
+                scheduleProxyUpgrade();
+              }, 45_000);
+            };
+            scheduleProxyUpgrade();
+          }
 
           if (statsTimer) clearInterval(statsTimer);
           statsTimer = setInterval(() => {
@@ -558,29 +624,40 @@ export function Player({
 
           console.log(
             "[WebTorrent] ready. Files:",
-            torrent.files.map((f: any) => `${f.name} (${formatBytes(f.length)})`),
+            torrent.files.map((f) => `${f.name} (${formatBytes(f.length)})`),
           );
 
-          const videoFiles = torrent.files.filter((f: any) => VIDEO_RE.test(f.name));
+          const videoFiles = torrent.files.filter((f) => VIDEO_RE.test(f.name));
           if (videoFiles.length === 0) {
             setPhase("error");
             setError(
               `Este torrent não contém arquivos de vídeo reconhecidos. Arquivos: ${torrent.files
-                .map((f: any) => f.name)
+                .map((f) => f.name)
                 .join(", ")}`,
             );
             return;
           }
 
-          const playable = videoFiles.filter((f: any) => NATIVE_PLAYABLE_RE.test(f.name));
-          const candidates = (playable.length ? playable : videoFiles).map((f: any) => ({
+          const forcedIndex =
+            typeof fileIndex === "number" && Number.isFinite(fileIndex) ? fileIndex : null;
+          const forcedFile = forcedIndex != null ? torrent.files[forcedIndex] : null;
+          type Candidate = { file: TorrentFile; index: number; resolution: number; length: number };
+          const playable = videoFiles.filter((f) => NATIVE_PLAYABLE_RE.test(f.name));
+          const selectedFiles: TorrentFile[] =
+            forcedFile && VIDEO_RE.test(forcedFile.name)
+              ? [forcedFile]
+              : playable.length
+                ? playable
+                : videoFiles;
+
+          const candidates: Candidate[] = selectedFiles.map((f) => ({
             file: f,
             index: torrent.files.indexOf(f),
             resolution: parseResolutionFromName(String(f.name)),
             length: Number(f.length) || 0,
           }));
 
-          const sorted = candidates.sort((a: any, b: any) => {
+          const sorted = candidates.sort((a, b) => {
             if (a.resolution && b.resolution) return a.resolution - b.resolution;
             if (a.resolution) return -1;
             if (b.resolution) return 1;
@@ -588,8 +665,8 @@ export function Player({
           });
 
           const opts: QualityOption[] = sorted
-            .filter((c: any) => c.index >= 0)
-            .map((c: any) => ({
+            .filter((c) => c.index >= 0)
+            .map((c) => ({
               id: String(c.index),
               label: c.resolution ? `${c.resolution}p` : String(c.file.name),
               resolution: c.resolution || 0,
@@ -599,8 +676,9 @@ export function Player({
           setQualityOptions(opts);
 
           const pref = safeGetPref(PREF_QUALITY);
-          const prefRes = pref ? Number(pref) : 0;
+          const prefRes = forcedIndex != null ? 0 : pref ? Number(pref) : 0;
           const initial =
+            (forcedIndex != null ? opts.find((o) => o.index === forcedIndex) : null) ??
             (prefRes ? opts.find((o) => o.resolution === prefRes) : null) ??
             (opts.length ? opts[0] : null) ??
             null;
@@ -611,7 +689,7 @@ export function Player({
             return;
           }
 
-          setQualityChoice(prefRes ? initial.id : "auto");
+          setQualityChoice(forcedIndex != null ? "auto" : prefRes ? initial.id : "auto");
 
           let currentFile = torrent.files[initial.index];
           webrtcQualityIdRef.current = initial.id;
@@ -642,27 +720,35 @@ export function Player({
             currentFile = targetFile;
             webrtcQualityIdRef.current = target.id;
 
-            torrent.files.forEach((f: any) => {
+            torrent.files.forEach((f) => {
               if (f !== targetFile) {
                 try {
                   f.deselect();
-                } catch {}
+                } catch {
+                  void 0;
+                }
               }
             });
             try {
               targetFile.select();
-            } catch {}
+            } catch {
+              void 0;
+            }
 
             setPhase("buffering");
             setStatusMsg(`Buffering "${targetFile.name}"...`);
 
-            targetFile.renderTo(video, { autoplay: false, controls: false }, (err: Error | null) => {
-              if (err) {
-                console.error("[WebTorrent] renderTo error:", err);
-                setPhase("error");
-                setError(`Falha ao preparar o vídeo: ${err.message}`);
-              }
-            });
+            targetFile.renderTo(
+              video,
+              { autoplay: false, controls: false },
+              (err: Error | null) => {
+                if (err) {
+                  console.error("[WebTorrent] renderTo error:", err);
+                  setPhase("error");
+                  setError(`Falha ao preparar o vídeo: ${err.message}`);
+                }
+              },
+            );
 
             initVideoUi(video);
 
@@ -670,11 +756,15 @@ export function Player({
               video.removeEventListener("loadedmetadata", onMeta);
               try {
                 if (ct && Number.isFinite(ct)) video.currentTime = ct;
-              } catch {}
+              } catch {
+                void 0;
+              }
               if (!paused) {
                 try {
                   void video.play();
-                } catch {}
+                } catch {
+                  void 0;
+                }
               }
             };
             video.addEventListener("loadedmetadata", onMeta, { once: true });
@@ -691,16 +781,20 @@ export function Player({
             );
           }
 
-          torrent.files.forEach((f: any) => {
+          torrent.files.forEach((f) => {
             if (f !== currentFile) {
               try {
                 f.deselect();
-              } catch {}
+              } catch {
+                void 0;
+              }
             }
           });
           try {
             currentFile.select();
-          } catch {}
+          } catch {
+            void 0;
+          }
 
           setPhase("buffering");
           setStatusMsg(`Buffering "${currentFile.name}"...`);
@@ -715,57 +809,61 @@ export function Player({
 
           initVideoUi(video);
 
-          const scheduleWebrtcUpgrade = () => {
-            if (qualityTimerRef.current) clearTimeout(qualityTimerRef.current);
-            qualityTimerRef.current = setTimeout(async () => {
-              if (destroyed) return;
-              if (qualityChoiceRef.current !== "auto") return;
-              const id = webrtcQualityIdRef.current;
-              if (!id) return;
-              const idx = opts.findIndex((o) => o.id === id);
-              if (idx < 0) return;
-              const next = opts[idx + 1];
-              if (!next) return;
+          if (forcedIndex == null) {
+            const scheduleWebrtcUpgrade = () => {
+              if (qualityTimerRef.current) clearTimeout(qualityTimerRef.current);
+              qualityTimerRef.current = setTimeout(async () => {
+                if (destroyed) return;
+                if (qualityChoiceRef.current !== "auto") return;
+                const id = webrtcQualityIdRef.current;
+                if (!id) return;
+                const idx = opts.findIndex((o) => o.id === id);
+                if (idx < 0) return;
+                const next = opts[idx + 1];
+                if (!next) return;
 
-              try {
-                const t = video.currentTime ?? 0;
-                const can = video.readyState >= 2 && t >= 15;
-                if (!can) {
+                try {
+                  const t = video.currentTime ?? 0;
+                  const can = video.readyState >= 2 && t >= 15;
+                  if (!can) {
+                    scheduleWebrtcUpgrade();
+                    return;
+                  }
+                } catch {
                   scheduleWebrtcUpgrade();
                   return;
                 }
-              } catch {
-                scheduleWebrtcUpgrade();
-                return;
-              }
 
-              await switchWebrtcVideo(next.id);
-              scheduleWebrtcUpgrade();
-            }, 45_000);
-          };
-          scheduleWebrtcUpgrade();
+                await switchWebrtcVideo(next.id);
+                scheduleWebrtcUpgrade();
+              }, 45_000);
+            };
+            scheduleWebrtcUpgrade();
+          }
 
           const loadWebRtcSubs = async () => {
             try {
               try {
                 objectUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
                 objectUrlsRef.current = [];
-              } catch {}
+              } catch {
+                void 0;
+              }
               setSubtitleTracks([]);
               setSubtitleChoice("off");
 
               const t = torrentRef.current;
               if (!t) return;
-              const subs = (t.files ?? []).filter((f: any) => SUB_RE.test(f.name));
+              const subs = (t.files ?? []).filter((f) => SUB_RE.test(f.name));
               if (subs.length === 0) return;
 
               const pref = safeGetPref(PREF_SUBS);
               const prefNorm = pref ? normalizeLang(pref).toLowerCase() : "";
 
               const nextTracks: SubtitleTrack[] = [];
-              const getBuffer = (f: any) =>
+              const getBuffer = (f: TorrentFile) =>
                 new Promise<Uint8Array>((resolve, reject) => {
-                  f.getBuffer((err: any, buf: any) => {
+                  f.getBuffer((err, buf) => {
                     if (err) reject(err);
                     else resolve(buf);
                   });
@@ -795,7 +893,9 @@ export function Player({
                 );
                 if (match) setSubtitleChoice(match.id);
               }
-            } catch {}
+            } catch {
+              void 0;
+            }
           };
 
           loadWebRtcSubs();
@@ -827,10 +927,10 @@ export function Player({
             }
           }, 10_000);
         });
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error("[Player] init failed:", e);
         setPhase("error");
-        setError(e?.message ?? "Falha ao inicializar o player.");
+        setError(e instanceof Error ? e.message : "Falha ao inicializar o player.");
       }
     };
 
@@ -850,26 +950,32 @@ export function Player({
           const ct = plyrRef.current.currentTime;
           const dur = plyrRef.current.duration;
           if (ct && dur && !isNaN(dur)) {
-            update(item.id, { progress: ct, duration: dur, lastPlayedAt: Date.now() });
+            onProgress(item.id, { progress: ct, duration: dur, lastPlayedAt: Date.now() });
           }
           plyrRef.current.destroy();
         }
-      } catch {}
+      } catch {
+        void 0;
+      }
       try {
         if (clientRef.current) clientRef.current.destroy();
-      } catch {}
+      } catch {
+        void 0;
+      }
       try {
         objectUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
         objectUrlsRef.current = [];
-      } catch {}
+      } catch {
+        void 0;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.id]);
+  }, [item.id, fileIndex]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    const list: any = (video as any).textTracks;
+    const list = video.textTracks;
     if (!list || typeof list.length !== "number") return;
     for (let i = 0; i < list.length; i++) {
       const tr = list[i];
@@ -886,7 +992,7 @@ export function Player({
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    const at: any = (video as any).audioTracks;
+    const at = (video as VideoWithAudioTracks).audioTracks;
     if (!at || typeof at.length !== "number") return;
     if (audioChoice === "auto") return;
     const idx = Number(audioChoice);
@@ -947,15 +1053,15 @@ export function Player({
         </div>
 
         <div className="relative rounded-lg overflow-hidden bg-black aspect-video">
-          <video ref={videoRef} controls playsInline crossOrigin="anonymous" className="w-full h-full">
+          <video
+            ref={videoRef}
+            controls
+            playsInline
+            crossOrigin="anonymous"
+            className="w-full h-full"
+          >
             {subtitleTracks.map((t) => (
-              <track
-                key={t.id}
-                kind="subtitles"
-                src={t.src}
-                srcLang={t.srcLang}
-                label={t.label}
-              />
+              <track key={t.id} kind="subtitles" src={t.src} srcLang={t.srcLang} label={t.label} />
             ))}
           </video>
 
@@ -967,7 +1073,9 @@ export function Player({
                 {sourceMode === "proxy" ? (
                   <p>Modo: Proxy</p>
                 ) : (
-                  <p>Peers: {stats.peers} · Baixado: {formatBytes(stats.downloaded)}</p>
+                  <p>
+                    Peers: {stats.peers} · Baixado: {formatBytes(stats.downloaded)}
+                  </p>
                 )}
                 {stats.length > 0 && (
                   <p>
@@ -1006,7 +1114,8 @@ export function Player({
               </select>
               {audioTracks.length === 0 && (
                 <div className="text-[11px] text-muted-foreground">
-                  Troca de áudio depende do suporte do navegador/arquivo (nem todo vídeo expõe múltiplas trilhas).
+                  Troca de áudio depende do suporte do navegador/arquivo (nem todo vídeo expõe
+                  múltiplas trilhas).
                 </div>
               )}
             </div>
@@ -1065,8 +1174,14 @@ export function Player({
         )}
 
         <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground bg-card/60 backdrop-blur rounded-md px-4 py-3 border border-border/40">
-          <Stat icon={<Download className="h-3.5 w-3.5 text-primary" />} label={formatBytes(stats.downloadSpeed, true)} />
-          <Stat icon={<Upload className="h-3.5 w-3.5 text-primary" />} label={formatBytes(stats.uploadSpeed, true)} />
+          <Stat
+            icon={<Download className="h-3.5 w-3.5 text-primary" />}
+            label={formatBytes(stats.downloadSpeed, true)}
+          />
+          <Stat
+            icon={<Upload className="h-3.5 w-3.5 text-primary" />}
+            label={formatBytes(stats.uploadSpeed, true)}
+          />
           <Stat
             icon={<Users className="h-3.5 w-3.5 text-primary" />}
             label={sourceMode === "proxy" ? "proxy" : `${stats.peers} peers`}

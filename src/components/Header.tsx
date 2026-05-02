@@ -8,8 +8,8 @@ export function Header({ onAdd }: { onAdd?: () => void }) {
         <Link to="/" className="flex items-center gap-2 group">
           <Film className="h-6 w-6 text-primary transition-transform group-hover:rotate-12" />
           <span className="font-display text-2xl tracking-wide">
-            <span className="text-primary">B</span>uffet de{" "}
-            <span className="text-primary">V</span>ídeo
+            <span className="text-primary">B</span>uffet de <span className="text-primary">V</span>
+            ídeo
           </span>
         </Link>
         <div className="flex items-center gap-2">

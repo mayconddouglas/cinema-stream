@@ -3,7 +3,9 @@ import { Heart, Play, Trash2, X } from "lucide-react";
 import type { LibraryItem } from "@/lib/storage";
 
 function getProgressPct(item: LibraryItem) {
-  return item.progress && item.duration ? Math.min(100, Math.round((item.progress / item.duration) * 100)) : 0;
+  return item.progress && item.duration
+    ? Math.min(100, Math.round((item.progress / item.duration) * 100))
+    : 0;
 }
 
 export function MovieDetailsModal({
@@ -46,7 +48,12 @@ export function MovieDetailsModal({
         <div className="relative h-52 md:h-72 bg-black">
           {backdrop ? (
             <>
-              <img src={backdrop} alt="" aria-hidden className="absolute inset-0 h-full w-full object-cover" />
+              <img
+                src={backdrop}
+                alt=""
+                aria-hidden
+                className="absolute inset-0 h-full w-full object-cover"
+              />
               <div className="absolute inset-0" style={{ background: "var(--gradient-hero)" }} />
             </>
           ) : (
@@ -54,7 +61,9 @@ export function MovieDetailsModal({
           )}
           <div className="absolute inset-0 flex items-end p-5 md:p-6">
             <div className="space-y-2 max-w-2xl">
-              <h3 className="font-display text-4xl md:text-5xl leading-none text-cream">{item.title}</h3>
+              <h3 className="font-display text-4xl md:text-5xl leading-none text-cream">
+                {item.title}
+              </h3>
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 {item.year && <span>{item.year}</span>}
                 {item.tmdbId && <span>TMDB {item.tmdbId}</span>}
@@ -66,7 +75,9 @@ export function MovieDetailsModal({
 
         <div className="p-5 md:p-6 space-y-4">
           {item.description ? (
-            <p className="text-sm text-muted-foreground leading-relaxed line-clamp-4">{item.description}</p>
+            <p className="text-sm text-muted-foreground leading-relaxed line-clamp-4">
+              {item.description}
+            </p>
           ) : (
             <p className="text-sm text-muted-foreground">
               Sem descrição ainda. Use “Buscar no TMDB” ao adicionar para preencher automaticamente.

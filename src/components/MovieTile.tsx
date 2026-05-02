@@ -2,7 +2,9 @@ import { Play } from "lucide-react";
 import type { LibraryItem } from "@/lib/storage";
 
 function getProgressPct(item: LibraryItem) {
-  return item.progress && item.duration ? Math.min(100, Math.round((item.progress / item.duration) * 100)) : 0;
+  return item.progress && item.duration
+    ? Math.min(100, Math.round((item.progress / item.duration) * 100))
+    : 0;
 }
 
 export function MovieTile({
@@ -25,7 +27,12 @@ export function MovieTile({
       tabIndex={0}
     >
       {item.poster ? (
-        <img src={item.poster} alt={item.title} loading="lazy" className="absolute inset-0 h-full w-full object-cover" />
+        <img
+          src={item.poster}
+          alt={item.title}
+          loading="lazy"
+          className="absolute inset-0 h-full w-full object-cover"
+        />
       ) : (
         <div className="absolute inset-0 bg-gradient-to-br from-secondary to-card" />
       )}
@@ -57,4 +64,3 @@ export function MovieTile({
     </div>
   );
 }
-

@@ -1,5 +1,11 @@
 import type { LibraryItem } from "@/lib/storage";
-import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
+import {
+  Carousel,
+  CarouselContent,
+  CarouselItem,
+  CarouselNext,
+  CarouselPrevious,
+} from "@/components/ui/carousel";
 import { MovieTile } from "@/components/MovieTile";
 
 export function HomeCarouselRow({
@@ -40,4 +46,3 @@ export function HomeCarouselRow({
     </section>
   );
 }
-

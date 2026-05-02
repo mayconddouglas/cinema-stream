@@ -154,7 +154,10 @@ function setCors(res) {
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-methods", "GET,OPTIONS");
   res.setHeader("access-control-allow-headers", "range,content-type");
-  res.setHeader("access-control-expose-headers", "accept-ranges,content-range,content-length,content-type");
+  res.setHeader(
+    "access-control-expose-headers",
+    "accept-ranges,content-range,content-length,content-type",
+  );
 }
 
 const client = new WebTorrent({ dht: true });
@@ -221,7 +224,12 @@ const server = http.createServer(async (req, res) => {
       url.pathname !== "/tmdb/search" &&
       url.pathname !== "/tmdb/movie" &&
       url.pathname !== "/tmdb/trending" &&
-      url.pathname !== "/tmdb/popular"
+      url.pathname !== "/tmdb/popular" &&
+      url.pathname !== "/tmdb/tv/search" &&
+      url.pathname !== "/tmdb/tv" &&
+      url.pathname !== "/tmdb/tv/season" &&
+      url.pathname !== "/tmdb/trending/tv" &&
+      url.pathname !== "/tmdb/popular/tv"
     ) {
       sendJson(res, 404, { error: "not_found" });
       return;
@@ -263,6 +271,38 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
+        if (url.pathname === "/tmdb/tv/search") {
+          const query = url.searchParams.get("query") || "";
+          const firstAirYear = url.searchParams.get("year") || "";
+          const language = url.searchParams.get("language") || "pt-BR";
+
+          if (!query || query.trim().length < 2 || query.length > 120) {
+            sendJson(res, 400, { error: "invalid_query" });
+            return;
+          }
+
+          const data = await tmdbFetch("/search/tv", {
+            query,
+            include_adult: "false",
+            language,
+            first_air_date_year: firstAirYear,
+          });
+
+          const results = Array.isArray(data?.results) ? data.results : [];
+          const mapped = results.slice(0, 12).map((r) => ({
+            id: r.id,
+            title: r.name,
+            originalTitle: r.original_name,
+            overview: r.overview,
+            year: r.first_air_date ? String(r.first_air_date).slice(0, 4) : null,
+            poster: r.poster_path ? `${TMDB_IMAGE_BASE}/w500${r.poster_path}` : null,
+            backdrop: r.backdrop_path ? `${TMDB_IMAGE_BASE}/w780${r.backdrop_path}` : null,
+          }));
+
+          sendJson(res, 200, { results: mapped });
+          return;
+        }
+
         if (url.pathname === "/tmdb/trending") {
           const language = url.searchParams.get("language") || "pt-BR";
           const data = await tmdbFetch("/trending/movie/day", { language });
@@ -273,6 +313,23 @@ const server = http.createServer(async (req, res) => {
             originalTitle: r.original_title,
             overview: r.overview,
             year: r.release_date ? String(r.release_date).slice(0, 4) : null,
+            poster: r.poster_path ? `${TMDB_IMAGE_BASE}/w500${r.poster_path}` : null,
+            backdrop: r.backdrop_path ? `${TMDB_IMAGE_BASE}/w780${r.backdrop_path}` : null,
+          }));
+          sendJson(res, 200, { results: mapped });
+          return;
+        }
+
+        if (url.pathname === "/tmdb/trending/tv") {
+          const language = url.searchParams.get("language") || "pt-BR";
+          const data = await tmdbFetch("/trending/tv/day", { language });
+          const results = Array.isArray(data?.results) ? data.results : [];
+          const mapped = results.slice(0, 24).map((r) => ({
+            id: r.id,
+            title: r.name,
+            originalTitle: r.original_name,
+            overview: r.overview,
+            year: r.first_air_date ? String(r.first_air_date).slice(0, 4) : null,
             poster: r.poster_path ? `${TMDB_IMAGE_BASE}/w500${r.poster_path}` : null,
             backdrop: r.backdrop_path ? `${TMDB_IMAGE_BASE}/w780${r.backdrop_path}` : null,
           }));
@@ -295,6 +352,123 @@ const server = http.createServer(async (req, res) => {
             backdrop: r.backdrop_path ? `${TMDB_IMAGE_BASE}/w780${r.backdrop_path}` : null,
           }));
           sendJson(res, 200, { results: mapped });
+          return;
+        }
+
+        if (url.pathname === "/tmdb/popular/tv") {
+          const language = url.searchParams.get("language") || "pt-BR";
+          const page = url.searchParams.get("page") || "1";
+          const data = await tmdbFetch("/tv/popular", { language, page });
+          const results = Array.isArray(data?.results) ? data.results : [];
+          const mapped = results.slice(0, 24).map((r) => ({
+            id: r.id,
+            title: r.name,
+            originalTitle: r.original_name,
+            overview: r.overview,
+            year: r.first_air_date ? String(r.first_air_date).slice(0, 4) : null,
+            poster: r.poster_path ? `${TMDB_IMAGE_BASE}/w500${r.poster_path}` : null,
+            backdrop: r.backdrop_path ? `${TMDB_IMAGE_BASE}/w780${r.backdrop_path}` : null,
+          }));
+          sendJson(res, 200, { results: mapped });
+          return;
+        }
+
+        if (url.pathname === "/tmdb/tv") {
+          const idRaw = url.searchParams.get("id") || "";
+          const language = url.searchParams.get("language") || "pt-BR";
+          const id = Number(idRaw);
+          if (!Number.isFinite(id) || id <= 0) {
+            sendJson(res, 400, { error: "invalid_id" });
+            return;
+          }
+
+          const data = await tmdbFetch(`/tv/${id}`, {
+            language,
+            append_to_response: "external_ids,credits,videos,recommendations",
+          });
+
+          const castSrc = Array.isArray(data?.credits?.cast) ? data.credits.cast : [];
+          const cast = castSrc.slice(0, 12).map((c) => ({
+            id: c.id,
+            name: c.name,
+            character: c.character ?? null,
+            profile: c.profile_path ? `${TMDB_IMAGE_BASE}/w185${c.profile_path}` : null,
+          }));
+
+          const vids = Array.isArray(data?.videos?.results) ? data.videos.results : [];
+          const yt = vids.filter((v) => v?.site === "YouTube" && typeof v?.key === "string");
+          const trailer =
+            yt.find((v) => v?.type === "Trailer" && v?.official) ??
+            yt.find((v) => v?.type === "Trailer") ??
+            yt.find((v) => v?.type === "Teaser") ??
+            null;
+
+          const seasonsSrc = Array.isArray(data?.seasons) ? data.seasons : [];
+          const seasons = seasonsSrc
+            .filter((s) => typeof s?.season_number === "number")
+            .map((s) => ({
+              seasonNumber: s.season_number,
+              name: s.name ?? null,
+              episodeCount: s.episode_count ?? null,
+              poster: s.poster_path ? `${TMDB_IMAGE_BASE}/w342${s.poster_path}` : null,
+              year: s.air_date ? String(s.air_date).slice(0, 4) : null,
+            }));
+
+          sendJson(res, 200, {
+            id: data.id,
+            imdbId: data?.external_ids?.imdb_id ?? null,
+            title: data.name,
+            originalTitle: data.original_name,
+            overview: data.overview,
+            year: data.first_air_date ? String(data.first_air_date).slice(0, 4) : null,
+            poster: data.poster_path ? `${TMDB_IMAGE_BASE}/w500${data.poster_path}` : null,
+            backdrop: data.backdrop_path ? `${TMDB_IMAGE_BASE}/w1280${data.backdrop_path}` : null,
+            genres: Array.isArray(data.genres)
+              ? data.genres.map((g) => ({ id: g.id, name: g.name }))
+              : [],
+            seasons,
+            cast,
+            trailer: trailer
+              ? {
+                  site: trailer.site,
+                  key: trailer.key,
+                  name: trailer.name ?? null,
+                }
+              : null,
+          });
+          return;
+        }
+
+        if (url.pathname === "/tmdb/tv/season") {
+          const idRaw = url.searchParams.get("id") || "";
+          const seasonRaw = url.searchParams.get("season") || "";
+          const language = url.searchParams.get("language") || "pt-BR";
+          const id = Number(idRaw);
+          const season = Number(seasonRaw);
+          if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(season) || season < 0) {
+            sendJson(res, 400, { error: "invalid_id" });
+            return;
+          }
+
+          const data = await tmdbFetch(`/tv/${id}/season/${season}`, { language });
+          const eps = Array.isArray(data?.episodes) ? data.episodes : [];
+          const episodes = eps
+            .filter((e) => typeof e?.episode_number === "number")
+            .map((e) => ({
+              season: e.season_number ?? season,
+              episode: e.episode_number,
+              name: e.name ?? null,
+              overview: e.overview ?? null,
+              still: e.still_path ? `${TMDB_IMAGE_BASE}/w780${e.still_path}` : null,
+              runtime: e.runtime ?? null,
+              airDate: e.air_date ?? null,
+            }));
+
+          sendJson(res, 200, {
+            id,
+            season,
+            episodes,
+          });
           return;
         }
 
@@ -328,7 +502,9 @@ const server = http.createServer(async (req, res) => {
             yt.find((v) => v?.type === "Teaser") ??
             null;
 
-          const recSrc = Array.isArray(data?.recommendations?.results) ? data.recommendations.results : [];
+          const recSrc = Array.isArray(data?.recommendations?.results)
+            ? data.recommendations.results
+            : [];
           const recommendations = recSrc.slice(0, 12).map((r) => ({
             id: r.id,
             title: r.title,
@@ -349,7 +525,9 @@ const server = http.createServer(async (req, res) => {
             poster: data.poster_path ? `${TMDB_IMAGE_BASE}/w500${data.poster_path}` : null,
             backdrop: data.backdrop_path ? `${TMDB_IMAGE_BASE}/w1280${data.backdrop_path}` : null,
             runtime: data.runtime ?? null,
-            genres: Array.isArray(data.genres) ? data.genres.map((g) => ({ id: g.id, name: g.name })) : [],
+            genres: Array.isArray(data.genres)
+              ? data.genres.map((g) => ({ id: g.id, name: g.name }))
+              : [],
             cast,
             trailer: trailer
               ? {
@@ -415,7 +593,9 @@ const server = http.createServer(async (req, res) => {
         };
       });
       const video = pickVideoFile(torrent);
-      const bestVideoIndex = video ? files.find((x) => x.kind === "video" && x.name === video.name)?.index ?? null : null;
+      const bestVideoIndex = video
+        ? (files.find((x) => x.kind === "video" && x.name === video.name)?.index ?? null)
+        : null;
       sendJson(res, 200, { bestVideoIndex, files });
       return;
     }
@@ -458,9 +638,12 @@ const server = http.createServer(async (req, res) => {
     const indexRaw = url.searchParams.get("index");
     const index = indexRaw ? Number(indexRaw) : NaN;
     const indexedFile =
-      Number.isFinite(index) && index >= 0 && index < (torrent.files?.length ?? 0) ? torrent.files[index] : null;
+      Number.isFinite(index) && index >= 0 && index < (torrent.files?.length ?? 0)
+        ? torrent.files[index]
+        : null;
 
-    const file = indexedFile && VIDEO_RE.test(indexedFile.name) ? indexedFile : pickVideoFile(torrent);
+    const file =
+      indexedFile && VIDEO_RE.test(indexedFile.name) ? indexedFile : pickVideoFile(torrent);
     if (!file) {
       sendJson(res, 422, { error: "no_video_file" });
       return;

@@ -51,7 +51,10 @@ function HomePage() {
       }),
     [items],
   );
-  const favorites = useMemo(() => items.filter((i) => i.favorite).sort((a, b) => b.addedAt - a.addedAt), [items]);
+  const favorites = useMemo(
+    () => items.filter((i) => i.favorite).sort((a, b) => b.addedAt - a.addedAt),
+    [items],
+  );
   const recentlyAdded = useMemo(() => [...items].sort((a, b) => b.addedAt - a.addedAt), [items]);
   const featured = recentlyAdded[0];
   const featuredBackdrop = featured?.backdrop ?? featured?.poster;
@@ -117,9 +120,7 @@ function HomePage() {
               <h1 className="font-display text-6xl md:text-7xl leading-none text-cream">
                 {featured.title}
               </h1>
-              {featured.year && (
-                <p className="text-sm text-muted-foreground">{featured.year}</p>
-              )}
+              {featured.year && <p className="text-sm text-muted-foreground">{featured.year}</p>}
               {featured.description && (
                 <p className="text-base text-muted-foreground line-clamp-3 max-w-xl">
                   {featured.description}
@@ -143,9 +144,24 @@ function HomePage() {
           <EmptyState onAdd={() => setShowAdd(true)} />
         ) : (
           <>
-            <HomeCarouselRow title="Continuar assistindo" items={continueSorted} onOpen={handleOpen} onPlay={handlePlay} />
-            <HomeCarouselRow title="Minha lista" items={favorites} onOpen={handleOpen} onPlay={handlePlay} />
-            <HomeCarouselRow title="Adicionados recentemente" items={recentlyAdded} onOpen={handleOpen} onPlay={handlePlay} />
+            <HomeCarouselRow
+              title="Continuar assistindo"
+              items={continueSorted}
+              onOpen={handleOpen}
+              onPlay={handlePlay}
+            />
+            <HomeCarouselRow
+              title="Minha lista"
+              items={favorites}
+              onOpen={handleOpen}
+              onPlay={handlePlay}
+            />
+            <HomeCarouselRow
+              title="Adicionados recentemente"
+              items={recentlyAdded}
+              onOpen={handleOpen}
+              onPlay={handlePlay}
+            />
             {yearRows.map((row) => (
               <HomeCarouselRow
                 key={row.year}
@@ -177,17 +193,13 @@ function HomePage() {
 
         <footer className="pt-12 pb-6 border-t border-border/40 text-center text-xs text-muted-foreground space-y-1">
           <p>
-            Buffet de Vídeo é um player WebTorrent. Adicione apenas conteúdo do qual você
-            tem direito de acesso.
+            Buffet de Vídeo é um player WebTorrent. Adicione apenas conteúdo do qual você tem
+            direito de acesso.
           </p>
         </footer>
       </main>
 
-      <AddMagnetDialog
-        open={showAdd}
-        onClose={() => setShowAdd(false)}
-        onAdded={setItems}
-      />
+      <AddMagnetDialog open={showAdd} onClose={() => setShowAdd(false)} onAdded={setItems} />
       <MovieDetailsModal
         open={!!details}
         item={details}
@@ -200,11 +212,7 @@ function HomePage() {
         onDelete={handleDelete}
       />
       {playing && (
-        <Player
-          item={playing}
-          onClose={() => setPlaying(null)}
-          onProgress={handleProgress}
-        />
+        <Player item={playing} onClose={() => setPlaying(null)} onProgress={handleProgress} />
       )}
     </div>
   );
@@ -219,8 +227,8 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
       <div className="space-y-2">
         <h2 className="font-display text-4xl text-cream">Sua sala está vazia</h2>
         <p className="text-muted-foreground">
-          Comece adicionando um magnet link de um vídeo do qual você tem direito — seus
-          próprios arquivos, conteúdo de domínio público ou Creative Commons.
+          Comece adicionando um magnet link de um vídeo do qual você tem direito — seus próprios
+          arquivos, conteúdo de domínio público ou Creative Commons.
         </p>
       </div>
       <button
