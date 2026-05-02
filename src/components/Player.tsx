@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import Plyr from "plyr";
+import * as PlyrNS from "plyr";
+const Plyr: any = (PlyrNS as any).default ?? PlyrNS;
 import { X, Download, Users, Loader2 } from "lucide-react";
 import type { LibraryItem } from "@/lib/storage";
 import { update } from "@/lib/storage";
@@ -27,7 +28,7 @@ export function Player({
   onProgress: (id: string, patch: Partial<LibraryItem>) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const plyrRef = useRef<Plyr | null>(null);
+  const plyrRef = useRef<any>(null);
   const clientRef = useRef<any>(null);
   const torrentRef = useRef<any>(null);
   const [stats, setStats] = useState<Stats>({
