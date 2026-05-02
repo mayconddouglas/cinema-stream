@@ -48,6 +48,17 @@ function getContentType(name) {
   return "application/octet-stream";
 }
 
+function needsTransmux(filename) {
+  const lower = String(filename).toLowerCase();
+  return (
+    lower.endsWith(".mkv") ||
+    lower.endsWith(".avi") ||
+    lower.endsWith(".mov") ||
+    lower.endsWith(".wmv") ||
+    lower.endsWith(".flv")
+  );
+}
+
 function guessLang(name) {
   const lower = String(name).toLowerCase();
   const candidates = [
@@ -312,6 +323,7 @@ const server = http.createServer(async (req, res) => {
 
     if (
       url.pathname !== "/stream" &&
+      url.pathname !== "/stream-audio" &&
       url.pathname !== "/meta" &&
       url.pathname !== "/file" &&
       url.pathname !== "/probe" &&
@@ -708,7 +720,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      await waitForReady(torrent, url.pathname === "/stream" ? 90_000 : 25_000);
+      await waitForReady(
+        torrent,
+        url.pathname === "/stream" || url.pathname === "/stream-audio" ? 90_000 : 25_000,
+      );
     } catch (e) {
       sendJson(res, 504, { error: "metadata_timeout" });
       return;
@@ -802,7 +817,11 @@ const server = http.createServer(async (req, res) => {
         }))
         .filter((t) => typeof t.index === "number");
 
-      const payload = { audioTracks, subtitleTracks };
+      const payload = {
+        audioTracks,
+        subtitleTracks,
+        transmuxed: needsTransmux(file.name) && FFMPEG_AVAILABLE,
+      };
       setCachedProbe(magnet, payload);
       sendJson(res, 200, payload);
       return;
@@ -962,6 +981,7 @@ const server = http.createServer(async (req, res) => {
         const kind = VIDEO_RE.test(f.name) ? "video" : SUB_RE.test(f.name) ? "subtitle" : "other";
         const lang = kind === "subtitle" ? guessLang(f.name) : null;
         const resolution = kind === "video" ? parseResolution(f.name) : null;
+        const transmuxed = kind === "video" ? needsTransmux(f.name) && FFMPEG_AVAILABLE : false;
         return {
           index,
           name: f.name,
@@ -970,6 +990,7 @@ const server = http.createServer(async (req, res) => {
           lang: lang?.lang ?? null,
           label: lang?.label ?? null,
           resolution,
+          transmuxed,
         };
       });
       const video = pickVideoFile(torrent);
@@ -1017,6 +1038,84 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/stream-audio") {
+      if (!FFMPEG_AVAILABLE) {
+        sendJson(res, 503, { error: "ffmpeg_unavailable" });
+        return;
+      }
+
+      const audioTrackRaw = url.searchParams.get("audioTrack") || "";
+      const audioTrack = Number(audioTrackRaw);
+      if (!Number.isFinite(audioTrack) || audioTrack < 0) {
+        sendJson(res, 400, { error: "invalid_audio_track" });
+        return;
+      }
+
+      const file = pickVideoFile(torrent);
+      if (!file) {
+        sendJson(res, 422, { error: "no_video_file" });
+        return;
+      }
+
+      res.statusCode = 200;
+      res.setHeader("cache-control", "no-cache");
+      res.setHeader("content-type", "audio/mp4");
+      res.setHeader("transfer-encoding", "chunked");
+
+      const fileStream = file.createReadStream();
+      const proc = spawn(
+        "ffmpeg",
+        [
+          "-i",
+          "pipe:0",
+          "-map",
+          `0:a:${audioTrack}`,
+          "-c:a",
+          "aac",
+          "-b:a",
+          "192k",
+          "-movflags",
+          "frag_keyframe+empty_moov",
+          "-f",
+          "mp4",
+          "pipe:1",
+        ],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+
+      proc.stdin.on("error", () => {});
+
+      req.on("close", () => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+        try {
+          fileStream.destroy();
+        } catch {}
+      });
+
+      proc.on("error", (err) => {
+        console.error("[ffmpeg] stream-audio error:", err);
+        try {
+          if (!res.writableEnded) res.end();
+        } catch {}
+      });
+
+      fileStream.on("error", (err) => {
+        console.error("[torrent] stream-audio file error:", err);
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+        try {
+          if (!res.writableEnded) res.end();
+        } catch {}
+      });
+
+      fileStream.pipe(proc.stdin);
+      proc.stdout.pipe(res);
+      return;
+    }
+
     const indexRaw = url.searchParams.get("index");
     const index = indexRaw ? Number(indexRaw) : NaN;
     const indexedFile =
@@ -1034,6 +1133,71 @@ const server = http.createServer(async (req, res) => {
     const total = Number(file.length) || 0;
     if (!total) {
       sendJson(res, 500, { error: "unknown_length" });
+      return;
+    }
+
+    if (needsTransmux(file.name) && FFMPEG_AVAILABLE) {
+      res.statusCode = 200;
+      res.setHeader("content-type", "video/mp4");
+      res.setHeader("transfer-encoding", "chunked");
+      res.setHeader("cache-control", "no-cache");
+      res.setHeader("x-transmuxed", "true");
+
+      const fileStream = file.createReadStream();
+      const proc = spawn(
+        "ffmpeg",
+        [
+          "-i",
+          "pipe:0",
+          "-map",
+          "0:v:0",
+          "-map",
+          "0:a",
+          "-c:v",
+          "copy",
+          "-c:a",
+          "aac",
+          "-b:a",
+          "192k",
+          "-movflags",
+          "frag_keyframe+empty_moov+default_base_moof",
+          "-f",
+          "mp4",
+          "pipe:1",
+        ],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+
+      proc.stdin.on("error", () => {});
+
+      req.on("close", () => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+        try {
+          fileStream.destroy();
+        } catch {}
+      });
+
+      proc.on("error", (err) => {
+        console.error("[ffmpeg] transmux error:", err);
+        try {
+          if (!res.writableEnded) res.end();
+        } catch {}
+      });
+
+      fileStream.on("error", (err) => {
+        console.error("[torrent] transmux file error:", err);
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+        try {
+          if (!res.writableEnded) res.end();
+        } catch {}
+      });
+
+      fileStream.pipe(proc.stdin);
+      proc.stdout.pipe(res);
       return;
     }
 

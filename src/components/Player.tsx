@@ -33,6 +33,7 @@ type ProxyMetaFile = {
   resolution: number | null;
   lang: string | null;
   label: string | null;
+  transmuxed?: boolean;
 };
 
 type ProxyMeta = {
@@ -158,6 +159,17 @@ function langLabel(lang: string) {
   return lang;
 }
 
+function needsTransmux(filename: string) {
+  const lower = String(filename).toLowerCase();
+  return (
+    lower.endsWith(".mkv") ||
+    lower.endsWith(".avi") ||
+    lower.endsWith(".mov") ||
+    lower.endsWith(".wmv") ||
+    lower.endsWith(".flv")
+  );
+}
+
 function srtToVtt(srt: string) {
   const cleaned = srt
     .replace(/\r/g, "")
@@ -217,6 +229,8 @@ export function Player({
   const playIntentRef = useRef<"none" | "auto">("none");
   const pendingSeekRef = useRef<number | null>(null);
   const preplayCleanupRef = useRef<(() => void) | null>(null);
+  const isTransmuxedRef = useRef(false);
+  const ffmpegAvailableRef = useRef<boolean | null>(null);
   const [phase, setPhase] = useState<Phase>("connecting");
   const [sourceMode, setSourceMode] = useState<SourceMode>("webrtc");
   const [statusMsg, setStatusMsg] = useState("Conectando à rede de peers...");
@@ -228,6 +242,7 @@ export function Player({
   const [preplayActive, setPreplayActive] = useState(false);
   const [preplayBuffered, setPreplayBuffered] = useState(0);
   const [videoSrc, setVideoSrc] = useState<string>("");
+  const [isTransmuxed, setIsTransmuxed] = useState(false);
   const [stats, setStats] = useState<Stats>({
     downloadSpeed: 0,
     uploadSpeed: 0,
@@ -252,6 +267,8 @@ export function Player({
   useEffect(() => {
     setPreplayActive(false);
     setPreplayBuffered(0);
+    setIsTransmuxed(false);
+    isTransmuxedRef.current = false;
   }, [item.id, sourceMode]);
 
   useEffect(() => {
@@ -310,6 +327,16 @@ export function Player({
             return;
           }
           proxyBaseRef.current = base;
+          (async () => {
+            try {
+              const healthRes = await fetch(`${base}/health`);
+              if (!healthRes.ok) return;
+              const health = (await healthRes.json()) as { ffmpegAvailable?: unknown };
+              ffmpegAvailableRef.current = health?.ffmpegAvailable === true;
+            } catch {
+              void 0;
+            }
+          })();
 
           const video = (playerRef.current?.el as HTMLVideoElement | null) ?? videoRef.current;
           if (!video) {
@@ -358,6 +385,18 @@ export function Player({
                 void 0;
               }
               pendingSeekRef.current = null;
+
+              if (ffmpegAvailableRef.current == null) {
+                try {
+                  const healthRes = await fetch(`${base}/health`);
+                  if (healthRes.ok) {
+                    const health = (await healthRes.json()) as { ffmpegAvailable?: unknown };
+                    ffmpegAvailableRef.current = health?.ffmpegAvailable === true;
+                  }
+                } catch {
+                  void 0;
+                }
+              }
 
               const cached = getCachedMeta(item.magnet);
               const meta =
@@ -408,6 +447,22 @@ export function Player({
               }
 
               if (typeof fileIndex === "number" && Number.isFinite(fileIndex)) {
+                const selected = files.find((f) => f.kind === "video" && f.index === fileIndex);
+                const transmuxed = selected?.transmuxed === true;
+                isTransmuxedRef.current = transmuxed;
+                setIsTransmuxed(transmuxed);
+                if (
+                  selected &&
+                  needsTransmux(selected.name) &&
+                  !transmuxed &&
+                  ffmpegAvailableRef.current === false
+                ) {
+                  setPhase("error");
+                  setError(
+                    "Este arquivo é MKV e requer o servidor proxy com ffmpeg instalado para reprodução. O servidor atual não tem ffmpeg disponível.",
+                  );
+                  return;
+                }
                 proxyQualityIndexRef.current = fileIndex;
                 await switchProxyVideo(fileIndex);
               } else {
@@ -419,6 +474,24 @@ export function Player({
                   null;
 
                 if (initial) {
+                  const selected = files.find(
+                    (f) => f.kind === "video" && f.index === initial.index,
+                  );
+                  const transmuxed = selected?.transmuxed === true;
+                  isTransmuxedRef.current = transmuxed;
+                  setIsTransmuxed(transmuxed);
+                  if (
+                    selected &&
+                    needsTransmux(selected.name) &&
+                    !transmuxed &&
+                    ffmpegAvailableRef.current === false
+                  ) {
+                    setPhase("error");
+                    setError(
+                      "Este arquivo é MKV e requer o servidor proxy com ffmpeg instalado para reprodução. O servidor atual não tem ffmpeg disponível.",
+                    );
+                    return;
+                  }
                   proxyQualityIndexRef.current = initial.index;
                   await switchProxyVideo(initial.index);
                   if (!destroyed && prefRes) setQualityChoice(initial.id);
@@ -464,12 +537,10 @@ export function Player({
                 const url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
                 objectUrlsRef.current.push(url);
                 try {
-                  playerRef.current?.textTracks.add({
+                  playerRef.current?.textTracks.add(url, {
                     kind: "subtitles",
-                    src: url,
                     label,
                     language: langGuess || "und",
-                    default: false,
                   });
                 } catch {
                   void 0;
@@ -488,6 +559,7 @@ export function Player({
               if (!healthRes.ok) return;
               const health = (await healthRes.json()) as { ffmpegAvailable?: unknown };
               if (health?.ffmpegAvailable !== true) return;
+              if (!isTransmuxedRef.current) return;
 
               const probeRes = await fetch(
                 `${base}/probe?magnet=${encodeURIComponent(item.magnet)}`,
@@ -527,12 +599,10 @@ export function Player({
                     ? (t as { label: string }).label
                     : lang;
                 try {
-                  playerRef.current?.textTracks.add({
+                  playerRef.current?.textTracks.add(url, {
                     kind: "subtitles",
-                    src: url,
                     label: langLabel(String(label)),
                     language: lang || "und",
-                    default: false,
                   });
                 } catch {
                   void 0;
@@ -951,12 +1021,10 @@ export function Player({
                 objectUrlsRef.current.push(url);
                 const lang = guessLangFromName(String(s.name));
                 try {
-                  playerRef.current?.textTracks.add({
+                  playerRef.current?.textTracks.add(url, {
                     kind: "subtitles",
-                    src: url,
                     label: lang.label,
                     language: lang.lang,
-                    default: false,
                   });
                 } catch {
                   void 0;
@@ -1272,7 +1340,20 @@ export function Player({
         />
         <Stat
           icon={<Users className="h-3.5 w-3.5 text-primary" />}
-          label={sourceMode === "proxy" ? "proxy" : `${stats.peers} peers`}
+          label={
+            sourceMode === "proxy" ? (
+              <span className="inline-flex items-center gap-2">
+                <span>proxy</span>
+                {isTransmuxed && (
+                  <span className="text-[10px] bg-primary/20 text-primary border border-primary/30 rounded-full px-2 py-0.5">
+                    MKV → MP4
+                  </span>
+                )}
+              </span>
+            ) : (
+              `${stats.peers} peers`
+            )
+          }
         />
         <div className="flex-1 min-w-[140px]">
           <div className="flex items-center justify-between mb-1">
