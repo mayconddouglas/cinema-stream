@@ -12,6 +12,7 @@ const DEFAULT_ANNOUNCE = [
   "https://tracker1.520.jp:443/announce",
   "https://tracker.torrent.eu.org:443/announce",
 ];
+const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 
 function getContentType(name) {
   const lower = String(name).toLowerCase();
@@ -108,6 +109,36 @@ function sendJson(res, status, obj) {
   res.end(body);
 }
 
+async function tmdbFetch(pathname, params) {
+  const apiKey = process.env.TMDB_API_KEY || "";
+  if (!apiKey) {
+    const err = new Error("tmdb_not_configured");
+    err.code = "tmdb_not_configured";
+    throw err;
+  }
+
+  const url = new URL(`https://api.themoviedb.org/3${pathname}`);
+  url.searchParams.set("api_key", apiKey);
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null || v === "") continue;
+    url.searchParams.set(k, String(v));
+  }
+
+  const res = await fetch(url.toString(), {
+    headers: {
+      accept: "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    const err = new Error("tmdb_error");
+    err.status = res.status;
+    throw err;
+  }
+
+  return res.json();
+}
+
 function setCors(res) {
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-methods", "GET,OPTIONS");
@@ -172,9 +203,89 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname !== "/stream" && url.pathname !== "/meta" && url.pathname !== "/file") {
+    if (
+      url.pathname !== "/stream" &&
+      url.pathname !== "/meta" &&
+      url.pathname !== "/file" &&
+      url.pathname !== "/tmdb/search" &&
+      url.pathname !== "/tmdb/movie"
+    ) {
       sendJson(res, 404, { error: "not_found" });
       return;
+    }
+
+    if (url.pathname.startsWith("/tmdb/")) {
+      try {
+        res.setHeader("cache-control", "no-store");
+
+        if (url.pathname === "/tmdb/search") {
+          const query = url.searchParams.get("query") || "";
+          const year = url.searchParams.get("year") || "";
+          const language = url.searchParams.get("language") || "pt-BR";
+
+          if (!query || query.trim().length < 2 || query.length > 120) {
+            sendJson(res, 400, { error: "invalid_query" });
+            return;
+          }
+
+          const data = await tmdbFetch("/search/movie", {
+            query,
+            include_adult: "false",
+            language,
+            year,
+          });
+
+          const results = Array.isArray(data?.results) ? data.results : [];
+          const mapped = results.slice(0, 12).map((r) => ({
+            id: r.id,
+            title: r.title,
+            originalTitle: r.original_title,
+            overview: r.overview,
+            year: r.release_date ? String(r.release_date).slice(0, 4) : null,
+            poster: r.poster_path ? `${TMDB_IMAGE_BASE}/w500${r.poster_path}` : null,
+            backdrop: r.backdrop_path ? `${TMDB_IMAGE_BASE}/w780${r.backdrop_path}` : null,
+          }));
+
+          sendJson(res, 200, { results: mapped });
+          return;
+        }
+
+        if (url.pathname === "/tmdb/movie") {
+          const idRaw = url.searchParams.get("id") || "";
+          const language = url.searchParams.get("language") || "pt-BR";
+          const id = Number(idRaw);
+          if (!Number.isFinite(id) || id <= 0) {
+            sendJson(res, 400, { error: "invalid_id" });
+            return;
+          }
+
+          const data = await tmdbFetch(`/movie/${id}`, {
+            language,
+            append_to_response: "external_ids",
+          });
+
+          sendJson(res, 200, {
+            id: data.id,
+            imdbId: data?.external_ids?.imdb_id ?? null,
+            title: data.title,
+            originalTitle: data.original_title,
+            overview: data.overview,
+            year: data.release_date ? String(data.release_date).slice(0, 4) : null,
+            poster: data.poster_path ? `${TMDB_IMAGE_BASE}/w500${data.poster_path}` : null,
+            backdrop: data.backdrop_path ? `${TMDB_IMAGE_BASE}/w1280${data.backdrop_path}` : null,
+            runtime: data.runtime ?? null,
+            genres: Array.isArray(data.genres) ? data.genres.map((g) => ({ id: g.id, name: g.name })) : [],
+          });
+          return;
+        }
+      } catch (e) {
+        if (e?.code === "tmdb_not_configured") {
+          sendJson(res, 503, { error: "tmdb_not_configured" });
+          return;
+        }
+        sendJson(res, 502, { error: "tmdb_unavailable" });
+        return;
+      }
     }
 
     const magnet = url.searchParams.get("magnet") || "";

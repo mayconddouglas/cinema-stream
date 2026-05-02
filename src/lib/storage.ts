@@ -5,8 +5,11 @@ export type LibraryItem = {
   title: string;
   magnet: string;
   poster?: string;
+  backdrop?: string;
   year?: string;
   description?: string;
+  tmdbId?: number;
+  imdbId?: string;
   addedAt: number;
   favorite?: boolean;
   progress?: number; // seconds

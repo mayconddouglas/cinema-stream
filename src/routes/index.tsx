@@ -54,6 +54,7 @@ function HomePage() {
   );
   const favorites = useMemo(() => items.filter((i) => i.favorite), [items]);
   const featured = items[0];
+  const featuredBackdrop = featured?.backdrop ?? featured?.poster;
 
   const visible = useMemo(() => {
     let src = items;
@@ -83,10 +84,10 @@ function HomePage() {
       <Header onAdd={() => setShowAdd(true)} />
 
       {/* Hero */}
-      {featured && featured.poster && (
+      {featured && featuredBackdrop && (
         <section className="relative h-[55vh] min-h-[380px] overflow-hidden border-b border-border/40">
           <img
-            src={featured.poster}
+            src={featuredBackdrop}
             alt=""
             aria-hidden
             className="absolute inset-0 h-full w-full object-cover scale-110 blur-2xl opacity-50"
