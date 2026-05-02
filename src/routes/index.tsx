@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Heart, Clock, Library as LibIcon, Search, Film } from "lucide-react";
+import { Film } from "lucide-react";
 import { Header } from "@/components/Header";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
 import { MovieCard } from "@/components/MovieCard";
+import { HomeCarouselRow } from "@/components/HomeCarouselRow";
 import { MovieDetailsModal } from "@/components/MovieDetailsModal";
 import { Player } from "@/components/Player";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
@@ -27,16 +28,12 @@ export const Route = createFileRoute("/")({
   component: HomePage,
 });
 
-type Tab = "all" | "continue" | "favorites";
-
 function HomePage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [playing, setPlaying] = useState<LibraryItem | null>(null);
   const [details, setDetails] = useState<LibraryItem | null>(null);
-  const [tab, setTab] = useState<Tab>("all");
-  const [query, setQuery] = useState("");
 
   useEffect(() => {
     getAll().then((items) => {
@@ -54,20 +51,35 @@ function HomePage() {
       }),
     [items],
   );
-  const favorites = useMemo(() => items.filter((i) => i.favorite), [items]);
-  const featured = items[0];
+  const favorites = useMemo(() => items.filter((i) => i.favorite).sort((a, b) => b.addedAt - a.addedAt), [items]);
+  const recentlyAdded = useMemo(() => [...items].sort((a, b) => b.addedAt - a.addedAt), [items]);
+  const featured = recentlyAdded[0];
   const featuredBackdrop = featured?.backdrop ?? featured?.poster;
 
-  const visible = useMemo(() => {
-    let src = items;
-    if (tab === "continue") src = continueWatching;
-    if (tab === "favorites") src = favorites;
-    if (query.trim()) {
-      const q = query.toLowerCase();
-      src = src.filter((i) => i.title.toLowerCase().includes(q));
+  const continueSorted = useMemo(() => {
+    return [...continueWatching].sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
+  }, [continueWatching]);
+
+  const yearRows = useMemo(() => {
+    const map = new Map<string, LibraryItem[]>();
+    for (const item of items) {
+      const y = item.year?.trim();
+      if (!y) continue;
+      if (!map.has(y)) map.set(y, []);
+      map.get(y)!.push(item);
     }
-    return src;
-  }, [tab, items, continueWatching, favorites, query]);
+
+    const rows = [...map.entries()]
+      .map(([year, items]) => ({
+        year,
+        items: items.sort((a, b) => b.addedAt - a.addedAt),
+      }))
+      .filter((r) => r.items.length >= 3)
+      .sort((a, b) => b.items.length - a.items.length)
+      .slice(0, 3);
+
+    return rows;
+  }, [items]);
 
   const handlePlay = (item: LibraryItem) => setPlaying(item);
   const handleOpen = (item: LibraryItem) => setDetails(item);
@@ -124,55 +136,43 @@ function HomePage() {
         </section>
       )}
 
-      <main className="container mx-auto px-6 py-10 space-y-8">
-        {/* Tabs + search */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex gap-1 bg-card/60 backdrop-blur border border-border/40 rounded-lg p-1 w-fit">
-            <TabBtn active={tab === "all"} onClick={() => setTab("all")} icon={<LibIcon className="h-4 w-4" />}>
-              Biblioteca <span className="opacity-60 ml-1">{items.length}</span>
-            </TabBtn>
-            <TabBtn active={tab === "continue"} onClick={() => setTab("continue")} icon={<Clock className="h-4 w-4" />}>
-              Continuar <span className="opacity-60 ml-1">{continueWatching.length}</span>
-            </TabBtn>
-            <TabBtn active={tab === "favorites"} onClick={() => setTab("favorites")} icon={<Heart className="h-4 w-4" />}>
-              Favoritos <span className="opacity-60 ml-1">{favorites.length}</span>
-            </TabBtn>
-          </div>
-
-          <div className="relative w-full md:w-80">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Buscar na biblioteca..."
-              className="w-full rounded-md bg-card/60 backdrop-blur border border-border/40 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-          </div>
-        </div>
-
-        {/* Grid */}
+      <main className="container mx-auto px-6 py-10 space-y-10">
         {loading ? (
           <p className="text-muted-foreground">Carregando biblioteca...</p>
-        ) : visible.length === 0 ? (
-          <EmptyState
-            tab={tab}
-            hasItems={items.length > 0}
-            onAdd={() => setShowAdd(true)}
-          />
+        ) : items.length === 0 ? (
+          <EmptyState onAdd={() => setShowAdd(true)} />
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
-            {visible.map((item, idx) => (
-              <MovieCard
-                key={item.id}
-                item={item}
-                index={idx}
-                onPlay={handlePlay}
+          <>
+            <HomeCarouselRow title="Continuar assistindo" items={continueSorted} onOpen={handleOpen} onPlay={handlePlay} />
+            <HomeCarouselRow title="Minha lista" items={favorites} onOpen={handleOpen} onPlay={handlePlay} />
+            <HomeCarouselRow title="Adicionados recentemente" items={recentlyAdded} onOpen={handleOpen} onPlay={handlePlay} />
+            {yearRows.map((row) => (
+              <HomeCarouselRow
+                key={row.year}
+                title={`Ano ${row.year}`}
+                items={row.items}
                 onOpen={handleOpen}
-                onToggleFav={handleToggleFav}
-                onDelete={handleDelete}
+                onPlay={handlePlay}
               />
             ))}
-          </div>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-2xl text-cream">Biblioteca</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
+                {recentlyAdded.map((item, idx) => (
+                  <MovieCard
+                    key={item.id}
+                    item={item}
+                    index={idx}
+                    onPlay={handlePlay}
+                    onOpen={handleOpen}
+                    onToggleFav={handleToggleFav}
+                    onDelete={handleDelete}
+                  />
+                ))}
+              </div>
+            </section>
+          </>
         )}
 
         <footer className="pt-12 pb-6 border-t border-border/40 text-center text-xs text-muted-foreground space-y-1">
@@ -210,70 +210,25 @@ function HomePage() {
   );
 }
 
-function TabBtn({
-  active,
-  onClick,
-  icon,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-}) {
+function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
-    <button
-      onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition ${
-        active
-          ? "bg-primary text-primary-foreground shadow-glow"
-          : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-      }`}
-    >
-      {icon}
-      {children}
-    </button>
-  );
-}
-
-function EmptyState({
-  tab,
-  hasItems,
-  onAdd,
-}: {
-  tab: Tab;
-  hasItems: boolean;
-  onAdd: () => void;
-}) {
-  if (!hasItems) {
-    return (
-      <div className="text-center py-20 space-y-6 max-w-md mx-auto animate-fade-up">
-        <div className="mx-auto h-20 w-20 rounded-full bg-primary/10 flex items-center justify-center">
-          <Film className="h-10 w-10 text-primary" />
-        </div>
-        <div className="space-y-2">
-          <h2 className="font-display text-4xl text-cream">Sua sala está vazia</h2>
-          <p className="text-muted-foreground">
-            Comece adicionando um magnet link de um vídeo do qual você tem direito —
-            seus próprios arquivos, conteúdo de domínio público ou Creative Commons.
-          </p>
-        </div>
-        <button
-          onClick={onAdd}
-          className="inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-glow hover:brightness-110 transition"
-        >
-          + Adicionar primeiro vídeo
-        </button>
+    <div className="text-center py-20 space-y-6 max-w-md mx-auto animate-fade-up">
+      <div className="mx-auto h-20 w-20 rounded-full bg-primary/10 flex items-center justify-center">
+        <Film className="h-10 w-10 text-primary" />
       </div>
-    );
-  }
-  return (
-    <div className="text-center py-16 text-muted-foreground">
-      {tab === "continue"
-        ? "Nada para continuar assistindo ainda."
-        : tab === "favorites"
-        ? "Você ainda não favoritou nenhum vídeo."
-        : "Nenhum resultado para sua busca."}
+      <div className="space-y-2">
+        <h2 className="font-display text-4xl text-cream">Sua sala está vazia</h2>
+        <p className="text-muted-foreground">
+          Comece adicionando um magnet link de um vídeo do qual você tem direito — seus
+          próprios arquivos, conteúdo de domínio público ou Creative Commons.
+        </p>
+      </div>
+      <button
+        onClick={onAdd}
+        className="inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-glow hover:brightness-110 transition"
+      >
+        + Adicionar primeiro vídeo
+      </button>
     </div>
   );
 }
