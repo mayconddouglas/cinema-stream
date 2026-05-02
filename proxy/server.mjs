@@ -46,6 +46,17 @@ function guessLang(name) {
   return { lang: "und", label: "Desconhecido" };
 }
 
+function parseResolution(name) {
+  const lower = String(name).toLowerCase();
+  const match = /(^|[.\-_ ])(\d{3,4})p([.\-_ ]|$)/i.exec(lower);
+  if (match) {
+    const n = Number(match[2]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  if (/(^|[.\-_ ])4k([.\-_ ]|$)/i.test(lower)) return 2160;
+  return 0;
+}
+
 function pickVideoFile(torrent) {
   const videoFiles = (torrent.files ?? []).filter((f) => VIDEO_RE.test(f.name));
   if (videoFiles.length === 0) return null;
@@ -392,6 +403,7 @@ const server = http.createServer(async (req, res) => {
       const files = (torrent.files ?? []).map((f, index) => {
         const kind = VIDEO_RE.test(f.name) ? "video" : SUB_RE.test(f.name) ? "subtitle" : "other";
         const lang = kind === "subtitle" ? guessLang(f.name) : null;
+        const resolution = kind === "video" ? parseResolution(f.name) : null;
         return {
           index,
           name: f.name,
@@ -399,6 +411,7 @@ const server = http.createServer(async (req, res) => {
           kind,
           lang: lang?.lang ?? null,
           label: lang?.label ?? null,
+          resolution,
         };
       });
       const video = pickVideoFile(torrent);
@@ -442,7 +455,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const file = pickVideoFile(torrent);
+    const indexRaw = url.searchParams.get("index");
+    const index = indexRaw ? Number(indexRaw) : NaN;
+    const indexedFile =
+      Number.isFinite(index) && index >= 0 && index < (torrent.files?.length ?? 0) ? torrent.files[index] : null;
+
+    const file = indexedFile && VIDEO_RE.test(indexedFile.name) ? indexedFile : pickVideoFile(torrent);
     if (!file) {
       sendJson(res, 422, { error: "no_video_file" });
       return;
