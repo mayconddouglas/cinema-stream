@@ -4,6 +4,7 @@ import { Heart, Clock, Library as LibIcon, Search, Film } from "lucide-react";
 import { Header } from "@/components/Header";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
 import { MovieCard } from "@/components/MovieCard";
+import { MovieDetailsModal } from "@/components/MovieDetailsModal";
 import { Player } from "@/components/Player";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 
@@ -33,6 +34,7 @@ function HomePage() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [playing, setPlaying] = useState<LibraryItem | null>(null);
+  const [details, setDetails] = useState<LibraryItem | null>(null);
   const [tab, setTab] = useState<Tab>("all");
   const [query, setQuery] = useState("");
 
@@ -68,10 +70,12 @@ function HomePage() {
   }, [tab, items, continueWatching, favorites, query]);
 
   const handlePlay = (item: LibraryItem) => setPlaying(item);
+  const handleOpen = (item: LibraryItem) => setDetails(item);
   const handleToggleFav = async (item: LibraryItem) => {
     setItems(await update(item.id, { favorite: !item.favorite }));
   };
   const handleDelete = async (item: LibraryItem) => {
+    if (details?.id === item.id) setDetails(null);
     setItems(await remove(item.id));
   };
   const handleProgress = async (id: string, patch: Partial<LibraryItem>) => {
@@ -163,6 +167,7 @@ function HomePage() {
                 item={item}
                 index={idx}
                 onPlay={handlePlay}
+                onOpen={handleOpen}
                 onToggleFav={handleToggleFav}
                 onDelete={handleDelete}
               />
@@ -182,6 +187,17 @@ function HomePage() {
         open={showAdd}
         onClose={() => setShowAdd(false)}
         onAdded={setItems}
+      />
+      <MovieDetailsModal
+        open={!!details}
+        item={details}
+        onClose={() => setDetails(null)}
+        onPlay={(item) => {
+          setDetails(null);
+          setPlaying(item);
+        }}
+        onToggleFav={handleToggleFav}
+        onDelete={handleDelete}
       />
       {playing && (
         <Player
