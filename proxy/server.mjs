@@ -261,8 +261,35 @@ const server = http.createServer(async (req, res) => {
 
           const data = await tmdbFetch(`/movie/${id}`, {
             language,
-            append_to_response: "external_ids",
+            append_to_response: "external_ids,credits,videos,recommendations",
           });
+
+          const castSrc = Array.isArray(data?.credits?.cast) ? data.credits.cast : [];
+          const cast = castSrc.slice(0, 12).map((c) => ({
+            id: c.id,
+            name: c.name,
+            character: c.character ?? null,
+            profile: c.profile_path ? `${TMDB_IMAGE_BASE}/w185${c.profile_path}` : null,
+          }));
+
+          const vids = Array.isArray(data?.videos?.results) ? data.videos.results : [];
+          const yt = vids.filter((v) => v?.site === "YouTube" && typeof v?.key === "string");
+          const trailer =
+            yt.find((v) => v?.type === "Trailer" && v?.official) ??
+            yt.find((v) => v?.type === "Trailer") ??
+            yt.find((v) => v?.type === "Teaser") ??
+            null;
+
+          const recSrc = Array.isArray(data?.recommendations?.results) ? data.recommendations.results : [];
+          const recommendations = recSrc.slice(0, 12).map((r) => ({
+            id: r.id,
+            title: r.title,
+            originalTitle: r.original_title,
+            overview: r.overview,
+            year: r.release_date ? String(r.release_date).slice(0, 4) : null,
+            poster: r.poster_path ? `${TMDB_IMAGE_BASE}/w500${r.poster_path}` : null,
+            backdrop: r.backdrop_path ? `${TMDB_IMAGE_BASE}/w780${r.backdrop_path}` : null,
+          }));
 
           sendJson(res, 200, {
             id: data.id,
@@ -275,6 +302,15 @@ const server = http.createServer(async (req, res) => {
             backdrop: data.backdrop_path ? `${TMDB_IMAGE_BASE}/w1280${data.backdrop_path}` : null,
             runtime: data.runtime ?? null,
             genres: Array.isArray(data.genres) ? data.genres.map((g) => ({ id: g.id, name: g.name })) : [],
+            cast,
+            trailer: trailer
+              ? {
+                  site: trailer.site,
+                  key: trailer.key,
+                  name: trailer.name ?? null,
+                }
+              : null,
+            recommendations,
           });
           return;
         }

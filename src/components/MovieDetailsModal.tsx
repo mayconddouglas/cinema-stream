@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { Heart, Play, Trash2, X } from "lucide-react";
 import type { LibraryItem } from "@/lib/storage";
 
@@ -90,6 +91,17 @@ export function MovieDetailsModal({
               {progressPct > 0 && progressPct < 95 ? "Continuar" : "Assistir"}
             </button>
 
+            {item.tmdbId && (
+              <Link
+                to="/filme/$tmdbId"
+                params={{ tmdbId: String(item.tmdbId) }}
+                onClick={() => onClose()}
+                className="inline-flex items-center gap-2 rounded-md bg-secondary px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition"
+              >
+                Detalhes
+              </Link>
+            )}
+
             <button
               onClick={() => onToggleFav(item)}
               className="inline-flex items-center gap-2 rounded-md bg-secondary px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition"
@@ -113,4 +125,3 @@ export function MovieDetailsModal({
     </div>
   );
 }
-
