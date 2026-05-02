@@ -13,6 +13,7 @@ type Stats = {
 };
 
 type Phase = "connecting" | "metadata" | "buffering" | "ready" | "error";
+type SourceMode = "webrtc" | "proxy";
 
 function formatBytes(bytes: number, perSecond = false) {
   const suffix = perSecond ? "/s" : "";
@@ -39,7 +40,9 @@ export function Player({
   const plyrRef = useRef<any>(null);
   const clientRef = useRef<any>(null);
   const torrentRef = useRef<any>(null);
+  const proxyStartedRef = useRef(false);
   const [phase, setPhase] = useState<Phase>("connecting");
+  const [sourceMode, setSourceMode] = useState<SourceMode>("webrtc");
   const [statusMsg, setStatusMsg] = useState("Conectando à rede de peers...");
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -69,6 +72,124 @@ export function Player({
         if (destroyed) return;
 
         const Plyr: any = (PlyrMod as any).default ?? PlyrMod;
+
+        const initVideoUi = (video: HTMLVideoElement) => {
+          try {
+            if (plyrRef.current) plyrRef.current.destroy();
+          } catch {}
+
+          plyrRef.current = new Plyr(video, {
+            controls: [
+              "play-large",
+              "play",
+              "progress",
+              "current-time",
+              "duration",
+              "mute",
+              "volume",
+              "captions",
+              "settings",
+              "fullscreen",
+            ],
+            settings: ["captions", "quality", "speed"],
+            speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
+            keyboard: { focused: true, global: true },
+          });
+
+          const onLoadedMeta = () => {
+            setPhase("ready");
+            setStatusMsg("");
+            if (item.progress && item.progress > 5 && item.duration) {
+              try {
+                video.currentTime = item.progress;
+              } catch {}
+            }
+          };
+          video.addEventListener("loadedmetadata", onLoadedMeta, { once: true });
+
+          video.addEventListener("error", () => {
+            const me = video.error;
+            const codeMap: Record<number, string> = {
+              1: "MEDIA_ERR_ABORTED",
+              2: "MEDIA_ERR_NETWORK",
+              3: "MEDIA_ERR_DECODE — formato/codec não suportado pelo navegador",
+              4: "MEDIA_ERR_SRC_NOT_SUPPORTED — formato/codec não suportado pelo navegador",
+            };
+            const reason = me ? codeMap[me.code] ?? `código ${me.code}` : "desconhecido";
+            console.error("[Video] error:", reason, me);
+            setPhase("error");
+            setError(`Erro de reprodução: ${reason}. Tente um torrent em MP4 (H.264 + AAC).`);
+          });
+        };
+
+        const startProxy = (reason: string) => {
+          if (destroyed) return;
+          if (proxyStartedRef.current) return;
+          proxyStartedRef.current = true;
+
+          setSourceMode("proxy");
+          setWarning(
+            reason ||
+              "WebTorrent no navegador só conecta a peers WebRTC. Usando servidor proxy para baixar via BitTorrent tradicional.",
+          );
+
+          if (metadataTimeout) clearTimeout(metadataTimeout);
+          if (peersTimeout) clearTimeout(peersTimeout);
+
+          try {
+            if (clientRef.current) clientRef.current.destroy();
+          } catch {}
+          clientRef.current = null;
+          torrentRef.current = null;
+
+          const proxyBase = (import.meta as any).env?.VITE_TORRENT_PROXY_URL as string | undefined;
+          const base = typeof proxyBase === "string" ? proxyBase.trim().replace(/\/+$/, "") : "";
+          if (!base) {
+            setPhase("error");
+            setError(
+              "Modo proxy não configurado. Defina a variável VITE_TORRENT_PROXY_URL apontando para o servidor Node (proxy) e faça o redeploy.",
+            );
+            return;
+          }
+
+          const video = videoRef.current!;
+          setPhase("buffering");
+          setStatusMsg("Preparando streaming via servidor...");
+
+          video.removeAttribute("src");
+          video.load();
+          video.src = `${base}/stream?magnet=${encodeURIComponent(item.magnet)}`;
+          video.load();
+
+          initVideoUi(video);
+
+          if (statsTimer) clearInterval(statsTimer);
+          statsTimer = setInterval(() => {
+            setStats({
+              downloadSpeed: 0,
+              uploadSpeed: 0,
+              peers: 0,
+              progress: 0,
+              downloaded: 0,
+              length: 0,
+            });
+          }, 1000);
+
+          if (saveTimer) clearInterval(saveTimer);
+          saveTimer = setInterval(() => {
+            const p = plyrRef.current;
+            if (!p) return;
+            const ct = p.currentTime;
+            const dur = p.duration;
+            if (ct && dur && !isNaN(dur)) {
+              onProgress(item.id, {
+                progress: ct,
+                duration: dur,
+                lastPlayedAt: Date.now(),
+              });
+            }
+          }, 10_000);
+        };
 
         const client = new WebTorrent();
         clientRef.current = client;
@@ -129,8 +250,8 @@ export function Player({
         peersTimeout = setTimeout(() => {
           if (destroyed || torrentRef.current?.files?.length) return;
           if ((torrentRef.current?.numPeers ?? 0) === 0) {
-            setStatusMsg(
-              "Sem peers conectados ainda. WebTorrent só conecta a peers que falam WebRTC (clientes web). Aguardando...",
+            startProxy(
+              "Sem peers WebRTC conectados. Esse magnet provavelmente não tem peers WebRTC (caso comum em torrents do YTS/1337x).",
             );
           }
         }, 30_000);
@@ -194,49 +315,7 @@ export function Player({
             }
           });
 
-          // Initialize Plyr on top of the video element
-          plyrRef.current = new Plyr(video, {
-            controls: [
-              "play-large",
-              "play",
-              "progress",
-              "current-time",
-              "duration",
-              "mute",
-              "volume",
-              "captions",
-              "settings",
-              "fullscreen",
-            ],
-            settings: ["captions", "quality", "speed"],
-            speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
-            keyboard: { focused: true, global: true },
-          });
-
-          const onLoadedMeta = () => {
-            setPhase("ready");
-            setStatusMsg("");
-            if (item.progress && item.progress > 5 && item.duration) {
-              try {
-                video.currentTime = item.progress;
-              } catch {}
-            }
-          };
-          video.addEventListener("loadedmetadata", onLoadedMeta, { once: true });
-
-          video.addEventListener("error", () => {
-            const me = video.error;
-            const codeMap: Record<number, string> = {
-              1: "MEDIA_ERR_ABORTED",
-              2: "MEDIA_ERR_NETWORK",
-              3: "MEDIA_ERR_DECODE — formato/codec não suportado pelo navegador",
-              4: "MEDIA_ERR_SRC_NOT_SUPPORTED — formato/codec não suportado pelo navegador",
-            };
-            const reason = me ? codeMap[me.code] ?? `código ${me.code}` : "desconhecido";
-            console.error("[Video] error:", reason, me);
-            setPhase("error");
-            setError(`Erro de reprodução: ${reason}. Tente um torrent em MP4 (H.264 + AAC).`);
-          });
+          initVideoUi(video);
 
           statsTimer = setInterval(() => {
             const t = torrentRef.current;
@@ -323,7 +402,11 @@ export function Player({
               <Loader2 className="h-10 w-10 text-primary animate-spin" />
               <p className="text-sm text-cream font-medium">{statusMsg}</p>
               <div className="text-xs text-muted-foreground space-y-1">
-                <p>Peers: {stats.peers} · Baixado: {formatBytes(stats.downloaded)}</p>
+                {sourceMode === "proxy" ? (
+                  <p>Modo: Proxy</p>
+                ) : (
+                  <p>Peers: {stats.peers} · Baixado: {formatBytes(stats.downloaded)}</p>
+                )}
                 {stats.length > 0 && (
                   <p>
                     Buffer: {stats.progress.toFixed(1)}% de {formatBytes(stats.length)}
@@ -352,7 +435,10 @@ export function Player({
         <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground bg-card/60 backdrop-blur rounded-md px-4 py-3 border border-border/40">
           <Stat icon={<Download className="h-3.5 w-3.5 text-primary" />} label={formatBytes(stats.downloadSpeed, true)} />
           <Stat icon={<Upload className="h-3.5 w-3.5 text-primary" />} label={formatBytes(stats.uploadSpeed, true)} />
-          <Stat icon={<Users className="h-3.5 w-3.5 text-primary" />} label={`${stats.peers} peers`} />
+          <Stat
+            icon={<Users className="h-3.5 w-3.5 text-primary" />}
+            label={sourceMode === "proxy" ? "proxy" : `${stats.peers} peers`}
+          />
           <div className="flex-1 min-w-[140px]">
             <div className="flex items-center justify-between mb-1">
               <span>Buffer</span>
