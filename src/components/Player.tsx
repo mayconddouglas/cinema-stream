@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Download, Upload, Users, Loader2, AlertCircle } from "lucide-react";
+import { X, Download, Upload, Users, Loader2, AlertCircle, Settings } from "lucide-react";
 import type { LibraryItem } from "@/lib/storage";
 import { update } from "@/lib/storage";
 
@@ -15,6 +15,19 @@ type Stats = {
 type Phase = "connecting" | "metadata" | "buffering" | "ready" | "error";
 type SourceMode = "webrtc" | "proxy";
 
+type SubtitleTrack = {
+  id: string;
+  label: string;
+  srcLang: string;
+  src: string;
+};
+
+type AudioTrackOption = {
+  id: string;
+  label: string;
+  lang: string;
+};
+
 function formatBytes(bytes: number, perSecond = false) {
   const suffix = perSecond ? "/s" : "";
   if (bytes < 1024) return `${bytes.toFixed(0)} B${suffix}`;
@@ -26,6 +39,55 @@ function formatBytes(bytes: number, perSecond = false) {
 const VIDEO_RE = /\.(mp4|webm|mkv|m4v|mov|avi|ogv|ogg)$/i;
 // Browsers can only natively play mp4/webm/ogg. mkv/avi/mov often fail silently.
 const NATIVE_PLAYABLE_RE = /\.(mp4|webm|ogv|ogg|m4v)$/i;
+const SUB_RE = /\.(vtt|srt)$/i;
+const PREF_AUDIO = "buffet_pref_audio_lang";
+const PREF_SUBS = "buffet_pref_sub_lang";
+
+function normalizeLang(raw: string) {
+  return raw.trim().replace("_", "-");
+}
+
+function guessLangFromName(name: string) {
+  const lower = name.toLowerCase();
+  const candidates = [
+    { re: /(^|[.\-_ ])pt(br)?([.\-_ ]|$)/i, lang: "pt-BR", label: "Português (Brasil)" },
+    { re: /(^|[.\-_ ])pt([.\-_ ]|$)/i, lang: "pt", label: "Português" },
+    { re: /(^|[.\-_ ])en(g)?([.\-_ ]|$)/i, lang: "en", label: "English" },
+    { re: /(^|[.\-_ ])es(p)?([.\-_ ]|$)/i, lang: "es", label: "Español" },
+    { re: /(^|[.\-_ ])fr([.\-_ ]|$)/i, lang: "fr", label: "Français" },
+    { re: /(^|[.\-_ ])it([.\-_ ]|$)/i, lang: "it", label: "Italiano" },
+    { re: /(^|[.\-_ ])de([.\-_ ]|$)/i, lang: "de", label: "Deutsch" },
+    { re: /(^|[.\-_ ])ja(p)?([.\-_ ]|$)/i, lang: "ja", label: "日本語" },
+  ];
+  for (const c of candidates) {
+    if (c.re.test(lower)) return { lang: c.lang, label: c.label };
+  }
+  return { lang: "und", label: "Desconhecido" };
+}
+
+function srtToVtt(srt: string) {
+  const cleaned = srt
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.replace(/^(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2"))
+    .join("\n");
+
+  return `WEBVTT\n\n${cleaned}`;
+}
+
+function safeGetPref(key: string) {
+  try {
+    return localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function safeSetPref(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
 
 export function Player({
   item,
@@ -41,11 +103,17 @@ export function Player({
   const clientRef = useRef<any>(null);
   const torrentRef = useRef<any>(null);
   const proxyStartedRef = useRef(false);
+  const objectUrlsRef = useRef<string[]>([]);
   const [phase, setPhase] = useState<Phase>("connecting");
   const [sourceMode, setSourceMode] = useState<SourceMode>("webrtc");
   const [statusMsg, setStatusMsg] = useState("Conectando à rede de peers...");
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [subtitleTracks, setSubtitleTracks] = useState<SubtitleTrack[]>([]);
+  const [subtitleChoice, setSubtitleChoice] = useState<string>("off");
+  const [audioTracks, setAudioTracks] = useState<AudioTrackOption[]>([]);
+  const [audioChoice, setAudioChoice] = useState<string>("auto");
   const [stats, setStats] = useState<Stats>({
     downloadSpeed: 0,
     uploadSpeed: 0,
@@ -103,6 +171,33 @@ export function Player({
               try {
                 video.currentTime = item.progress;
               } catch {}
+            }
+
+            try {
+              const at: any = (video as any).audioTracks;
+              if (at && typeof at.length === "number") {
+                const opts: AudioTrackOption[] = [];
+                for (let i = 0; i < at.length; i++) {
+                  const tr = at[i];
+                  const lang = normalizeLang(String(tr?.language ?? "und"));
+                  const label = String(tr?.label || tr?.language || `Áudio ${i + 1}`);
+                  opts.push({ id: String(i), label, lang });
+                }
+                setAudioTracks(opts);
+
+                const pref = safeGetPref(PREF_AUDIO);
+                if (pref) {
+                  const target = normalizeLang(pref).toLowerCase();
+                  const match = opts.find(
+                    (o) => o.lang.toLowerCase() === target || o.lang.toLowerCase().startsWith(`${target}-`),
+                  );
+                  if (match) setAudioChoice(match.id);
+                }
+              } else {
+                setAudioTracks([]);
+              }
+            } catch {
+              setAudioTracks([]);
             }
           };
           video.addEventListener("loadedmetadata", onLoadedMeta, { once: true });
@@ -162,6 +257,59 @@ export function Player({
           video.load();
 
           initVideoUi(video);
+
+          const loadProxySubs = async () => {
+            try {
+              try {
+                objectUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
+                objectUrlsRef.current = [];
+              } catch {}
+              setSubtitleTracks([]);
+              setSubtitleChoice("off");
+
+              const metaRes = await fetch(`${base}/meta?magnet=${encodeURIComponent(item.magnet)}`);
+              if (!metaRes.ok) return;
+              const meta = (await metaRes.json()) as any;
+              const files = Array.isArray(meta?.files) ? meta.files : [];
+              const subs = files.filter((f: any) => f?.kind === "subtitle" && typeof f?.index === "number");
+              if (subs.length === 0) return;
+
+              const pref = safeGetPref(PREF_SUBS);
+              const prefNorm = pref ? normalizeLang(pref).toLowerCase() : "";
+
+              const nextTracks: SubtitleTrack[] = [];
+              for (const s of subs.slice(0, 10)) {
+                const name = String(s.name || "");
+                const idx = Number(s.index);
+                const langGuess = s.lang ? String(s.lang) : guessLangFromName(name).lang;
+                const label = s.label ? String(s.label) : guessLangFromName(name).label;
+                const fileRes = await fetch(`${base}/file?magnet=${encodeURIComponent(item.magnet)}&index=${idx}`);
+                if (!fileRes.ok) continue;
+                const text = await fileRes.text();
+                const vtt = name.toLowerCase().endsWith(".srt") ? srtToVtt(text) : text;
+                const url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+                objectUrlsRef.current.push(url);
+                nextTracks.push({
+                  id: `proxy-${idx}`,
+                  label,
+                  srcLang: langGuess || "und",
+                  src: url,
+                });
+              }
+              if (destroyed) return;
+              setSubtitleTracks(nextTracks);
+              if (prefNorm) {
+                const match = nextTracks.find(
+                  (t) =>
+                    normalizeLang(t.srcLang).toLowerCase() === prefNorm ||
+                    normalizeLang(t.srcLang).toLowerCase().startsWith(`${prefNorm}-`),
+                );
+                if (match) setSubtitleChoice(match.id);
+              }
+            } catch {}
+          };
+
+          loadProxySubs();
 
           if (statsTimer) clearInterval(statsTimer);
           statsTimer = setInterval(() => {
@@ -317,6 +465,61 @@ export function Player({
 
           initVideoUi(video);
 
+          const loadWebRtcSubs = async () => {
+            try {
+              try {
+                objectUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
+                objectUrlsRef.current = [];
+              } catch {}
+              setSubtitleTracks([]);
+              setSubtitleChoice("off");
+
+              const t = torrentRef.current;
+              if (!t) return;
+              const subs = (t.files ?? []).filter((f: any) => SUB_RE.test(f.name));
+              if (subs.length === 0) return;
+
+              const pref = safeGetPref(PREF_SUBS);
+              const prefNorm = pref ? normalizeLang(pref).toLowerCase() : "";
+
+              const nextTracks: SubtitleTrack[] = [];
+              const getBuffer = (f: any) =>
+                new Promise<Uint8Array>((resolve, reject) => {
+                  f.getBuffer((err: any, buf: any) => {
+                    if (err) reject(err);
+                    else resolve(buf);
+                  });
+                });
+
+              for (const s of subs.slice(0, 10)) {
+                const buf = await getBuffer(s);
+                const text = new TextDecoder().decode(buf);
+                const vtt = s.name.toLowerCase().endsWith(".srt") ? srtToVtt(text) : text;
+                const url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+                objectUrlsRef.current.push(url);
+                const lang = guessLangFromName(String(s.name));
+                nextTracks.push({
+                  id: `webrtc-${String(s.path ?? s.name)}`,
+                  label: lang.label,
+                  srcLang: lang.lang,
+                  src: url,
+                });
+              }
+              if (destroyed) return;
+              setSubtitleTracks(nextTracks);
+              if (prefNorm) {
+                const match = nextTracks.find(
+                  (t) =>
+                    normalizeLang(t.srcLang).toLowerCase() === prefNorm ||
+                    normalizeLang(t.srcLang).toLowerCase().startsWith(`${prefNorm}-`),
+                );
+                if (match) setSubtitleChoice(match.id);
+              }
+            } catch {}
+          };
+
+          loadWebRtcSubs();
+
           statsTimer = setInterval(() => {
             const t = torrentRef.current;
             if (!t) return;
@@ -372,14 +575,57 @@ export function Player({
       try {
         if (clientRef.current) clientRef.current.destroy();
       } catch {}
+      try {
+        objectUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
+        objectUrlsRef.current = [];
+      } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.id]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const list: any = (video as any).textTracks;
+    if (!list || typeof list.length !== "number") return;
+    for (let i = 0; i < list.length; i++) {
+      const tr = list[i];
+      tr.mode = "disabled";
+    }
+    if (subtitleChoice === "off") return;
+    const idx = subtitleTracks.findIndex((t) => t.id === subtitleChoice);
+    if (idx >= 0 && list[idx]) {
+      list[idx].mode = "showing";
+      safeSetPref(PREF_SUBS, subtitleTracks[idx].srcLang);
+    }
+  }, [subtitleChoice, subtitleTracks]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const at: any = (video as any).audioTracks;
+    if (!at || typeof at.length !== "number") return;
+    if (audioChoice === "auto") return;
+    const idx = Number(audioChoice);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= at.length) return;
+    for (let i = 0; i < at.length; i++) {
+      at[i].enabled = i === idx;
+    }
+    const opt = audioTracks.find((o) => o.id === audioChoice);
+    if (opt) safeSetPref(PREF_AUDIO, opt.lang);
+  }, [audioChoice, audioTracks]);
 
   const showOverlay = phase !== "ready";
 
   return (
     <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-4 animate-scale-in">
+      <button
+        onClick={() => setSettingsOpen((v) => !v)}
+        className="absolute top-4 right-16 z-10 rounded-full bg-card/80 backdrop-blur p-2.5 hover:bg-secondary hover:text-foreground transition"
+        aria-label="Configurações"
+      >
+        <Settings className="h-5 w-5" />
+      </button>
       <button
         onClick={onClose}
         className="absolute top-4 right-4 z-10 rounded-full bg-card/80 backdrop-blur p-2.5 hover:bg-destructive hover:text-destructive-foreground transition"
@@ -395,7 +641,17 @@ export function Player({
         </div>
 
         <div className="relative rounded-lg overflow-hidden bg-black aspect-video">
-          <video ref={videoRef} controls playsInline crossOrigin="anonymous" className="w-full h-full" />
+          <video ref={videoRef} controls playsInline crossOrigin="anonymous" className="w-full h-full">
+            {subtitleTracks.map((t) => (
+              <track
+                key={t.id}
+                kind="subtitles"
+                src={t.src}
+                srcLang={t.srcLang}
+                label={t.label}
+              />
+            ))}
+          </video>
 
           {showOverlay && phase !== "error" && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 p-6 text-center">
@@ -424,6 +680,54 @@ export function Player({
             </div>
           )}
         </div>
+
+        {settingsOpen && (
+          <div className="grid gap-3 md:grid-cols-2 bg-card/60 backdrop-blur rounded-md px-4 py-3 border border-border/40">
+            <div className="space-y-1.5">
+              <div className="text-xs text-muted-foreground">Áudio</div>
+              <select
+                value={audioChoice}
+                onChange={(e) => setAudioChoice(e.target.value)}
+                disabled={audioTracks.length === 0}
+                className="w-full rounded-md bg-background/60 border border-border/40 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+              >
+                <option value="auto">Automático</option>
+                {audioTracks.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+              {audioTracks.length === 0 && (
+                <div className="text-[11px] text-muted-foreground">
+                  Troca de áudio depende do suporte do navegador/arquivo (nem todo vídeo expõe múltiplas trilhas).
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="text-xs text-muted-foreground">Legendas</div>
+              <select
+                value={subtitleChoice}
+                onChange={(e) => setSubtitleChoice(e.target.value)}
+                disabled={subtitleTracks.length === 0}
+                className="w-full rounded-md bg-background/60 border border-border/40 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+              >
+                <option value="off">Desligado</option>
+                {subtitleTracks.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+              {subtitleTracks.length === 0 && (
+                <div className="text-[11px] text-muted-foreground">
+                  Nenhuma legenda encontrada no torrent (procuro arquivos .srt e .vtt).
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {warning && phase !== "error" && (
           <div className="flex items-start gap-2 text-xs bg-primary/10 border border-primary/30 rounded-md px-4 py-2.5 text-cream">

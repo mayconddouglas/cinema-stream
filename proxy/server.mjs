@@ -3,6 +3,7 @@ import WebTorrent from "webtorrent";
 
 const VIDEO_RE = /\.(mp4|webm|mkv|m4v|mov|avi|ogv|ogg)$/i;
 const NATIVE_PLAYABLE_RE = /\.(mp4|webm|ogv|ogg|m4v)$/i;
+const SUB_RE = /\.(vtt|srt|ass|ssa)$/i;
 const DEFAULT_ANNOUNCE = [
   "udp://tracker.opentrackr.org:1337/announce",
   "udp://tracker.openbittorrent.com:80/announce",
@@ -20,7 +21,28 @@ function getContentType(name) {
   if (lower.endsWith(".mkv")) return "video/x-matroska";
   if (lower.endsWith(".mov")) return "video/quicktime";
   if (lower.endsWith(".avi")) return "video/x-msvideo";
+  if (lower.endsWith(".vtt")) return "text/vtt; charset=utf-8";
+  if (lower.endsWith(".srt")) return "application/x-subrip; charset=utf-8";
+  if (lower.endsWith(".ass") || lower.endsWith(".ssa")) return "text/plain; charset=utf-8";
   return "application/octet-stream";
+}
+
+function guessLang(name) {
+  const lower = String(name).toLowerCase();
+  const candidates = [
+    { re: /(^|[.\-_ ])pt(br)?([.\-_ ]|$)/i, lang: "pt-BR", label: "Português (Brasil)" },
+    { re: /(^|[.\-_ ])pt([.\-_ ]|$)/i, lang: "pt", label: "Português" },
+    { re: /(^|[.\-_ ])en(g)?([.\-_ ]|$)/i, lang: "en", label: "English" },
+    { re: /(^|[.\-_ ])es(p)?([.\-_ ]|$)/i, lang: "es", label: "Español" },
+    { re: /(^|[.\-_ ])fr([.\-_ ]|$)/i, lang: "fr", label: "Français" },
+    { re: /(^|[.\-_ ])it([.\-_ ]|$)/i, lang: "it", label: "Italiano" },
+    { re: /(^|[.\-_ ])de([.\-_ ]|$)/i, lang: "de", label: "Deutsch" },
+    { re: /(^|[.\-_ ])ja(p)?([.\-_ ]|$)/i, lang: "ja", label: "日本語" },
+  ];
+  for (const c of candidates) {
+    if (c.re.test(lower)) return { lang: c.lang, label: c.label };
+  }
+  return { lang: "und", label: "Desconhecido" };
 }
 
 function pickVideoFile(torrent) {
@@ -50,9 +72,10 @@ function parseRange(rangeHeader, size) {
   return { start, end };
 }
 
-function waitForReady(torrent) {
+function waitForReady(torrent, timeoutMs) {
   if (torrent.ready) return Promise.resolve();
   return new Promise((resolve, reject) => {
+    let timer = null;
     const onReady = () => {
       cleanup();
       resolve();
@@ -62,9 +85,16 @@ function waitForReady(torrent) {
       reject(err);
     };
     const cleanup = () => {
+      if (timer) clearTimeout(timer);
       torrent.off("ready", onReady);
       torrent.off("error", onError);
     };
+    if (timeoutMs && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("timeout"));
+      }, timeoutMs);
+    }
     torrent.on("ready", onReady);
     torrent.on("error", onError);
   });
@@ -142,7 +172,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname !== "/stream") {
+    if (url.pathname !== "/stream" && url.pathname !== "/meta" && url.pathname !== "/file") {
       sendJson(res, 404, { error: "not_found" });
       return;
     }
@@ -167,7 +197,66 @@ const server = http.createServer(async (req, res) => {
       torrent.__lastAccess = Date.now();
     }
 
-    await waitForReady(torrent);
+    try {
+      await waitForReady(torrent, url.pathname === "/stream" ? 90_000 : 25_000);
+    } catch (e) {
+      sendJson(res, 504, { error: "metadata_timeout" });
+      return;
+    }
+
+    if (url.pathname === "/meta") {
+      const files = (torrent.files ?? []).map((f, index) => {
+        const kind = VIDEO_RE.test(f.name) ? "video" : SUB_RE.test(f.name) ? "subtitle" : "other";
+        const lang = kind === "subtitle" ? guessLang(f.name) : null;
+        return {
+          index,
+          name: f.name,
+          length: Number(f.length) || 0,
+          kind,
+          lang: lang?.lang ?? null,
+          label: lang?.label ?? null,
+        };
+      });
+      const video = pickVideoFile(torrent);
+      const bestVideoIndex = video ? files.find((x) => x.kind === "video" && x.name === video.name)?.index ?? null : null;
+      sendJson(res, 200, { bestVideoIndex, files });
+      return;
+    }
+
+    if (url.pathname === "/file") {
+      const indexRaw = url.searchParams.get("index");
+      const index = indexRaw ? Number(indexRaw) : NaN;
+      if (!Number.isFinite(index) || index < 0 || index >= (torrent.files?.length ?? 0)) {
+        sendJson(res, 400, { error: "invalid_index" });
+        return;
+      }
+
+      const file = torrent.files[index];
+      if (!file || !SUB_RE.test(file.name)) {
+        sendJson(res, 404, { error: "not_found" });
+        return;
+      }
+
+      const total = Number(file.length) || 0;
+      if (!total) {
+        sendJson(res, 500, { error: "unknown_length" });
+        return;
+      }
+
+      res.statusCode = 200;
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("content-type", getContentType(file.name));
+      res.setHeader("content-length", String(total));
+
+      const stream = file.createReadStream();
+      stream.on("error", () => {
+        try {
+          res.destroy();
+        } catch {}
+      });
+      stream.pipe(res);
+      return;
+    }
 
     const file = pickVideoFile(torrent);
     if (!file) {
@@ -217,4 +306,3 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, "0.0.0.0", () => {
   process.stdout.write(`proxy listening on http://localhost:${port}\n`);
 });
-
