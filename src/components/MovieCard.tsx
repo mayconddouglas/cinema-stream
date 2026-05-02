@@ -5,12 +5,14 @@ export function MovieCard({
   item,
   index,
   onPlay,
+  onOpen,
   onToggleFav,
   onDelete,
 }: {
   item: LibraryItem;
   index: number;
   onPlay: (item: LibraryItem) => void;
+  onOpen: (item: LibraryItem) => void;
   onToggleFav: (item: LibraryItem) => void;
   onDelete: (item: LibraryItem) => void;
 }) {
@@ -23,6 +25,7 @@ export function MovieCard({
     <div
       className="card-hover group relative aspect-[2/3] rounded-lg overflow-hidden bg-secondary border border-border/40 animate-fade-up"
       style={{ animationDelay: `${Math.min(index * 40, 400)}ms` }}
+      onClick={() => onOpen(item)}
     >
       {item.poster ? (
         <img
@@ -89,7 +92,10 @@ export function MovieCard({
         )}
 
         <button
-          onClick={() => onPlay(item)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPlay(item);
+          }}
           className="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-md bg-primary py-2 text-sm font-medium text-primary-foreground hover:brightness-110 transition shadow-glow"
         >
           <Play className="h-4 w-4 fill-current" />
