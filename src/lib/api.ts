@@ -303,6 +303,18 @@ export async function iptvTouchRecent(payload: { type: "live" | "vod"; itemId: s
   return res.json();
 }
 
+export async function iptvGetRecent(params: {
+  type: "live" | "vod";
+  limit?: number;
+}): Promise<unknown[]> {
+  const url = new URL(`${getProxyBase()}/api/iptv/active/recent`);
+  url.searchParams.set("type", params.type);
+  if (params.limit) url.searchParams.set("limit", String(params.limit));
+  const res = await fetch(url.toString(), { headers: authHeaders() });
+  if (!res.ok) throw new Error(`api_iptv_recent_list_${res.status}`);
+  return res.json() as Promise<unknown[]>;
+}
+
 export function iptvLiveRelayUrl(streamId: string | number): string {
   const token = getApiSecret();
   const base = getProxyBase();

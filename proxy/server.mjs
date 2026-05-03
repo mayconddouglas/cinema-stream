@@ -720,6 +720,7 @@ function dbGetLiveStreams(accountId, params) {
           s.category_id,
           s.stream_icon,
           s.epg_channel_id,
+          s.added_at,
           CASE WHEN f.item_id IS NULL THEN 0 ELSE 1 END AS favorite
         FROM iptv_live_streams s
         LEFT JOIN iptv_favorites f
@@ -749,6 +750,7 @@ function dbGetVodStreams(accountId, params) {
           s.stream_icon,
           s.rating,
           s.container_extension,
+          s.added_at,
           CASE WHEN f.item_id IS NULL THEN 0 ELSE 1 END AS favorite
         FROM iptv_vod_streams s
         LEFT JOIN iptv_favorites f
@@ -758,6 +760,60 @@ function dbGetVodStreams(accountId, params) {
       `,
     )
     .all({ account_id: accountId, category_id: categoryId || null, q: `%${q}%` });
+}
+
+function dbGetIptvRecent(accountId, type, limit) {
+  const t = String(type ?? "");
+  if (t === "live") {
+    return db
+      .prepare(
+        `
+          SELECT
+            s.stream_id,
+            s.name,
+            s.category_id,
+            s.stream_icon,
+            s.epg_channel_id,
+            s.added_at,
+            r.last_played_at,
+            CASE WHEN f.item_id IS NULL THEN 0 ELSE 1 END AS favorite
+          FROM iptv_recent r
+          JOIN iptv_live_streams s
+            ON s.account_id = r.account_id AND CAST(s.stream_id AS TEXT) = r.item_id
+          LEFT JOIN iptv_favorites f
+            ON f.account_id = s.account_id AND f.type = 'live' AND f.item_id = CAST(s.stream_id AS TEXT)
+          WHERE r.account_id = ? AND r.type = 'live' AND s.disabled = 0
+          ORDER BY r.last_played_at DESC
+          LIMIT ?
+        `,
+      )
+      .all(accountId, Number(limit ?? 30));
+  }
+
+  return db
+    .prepare(
+      `
+        SELECT
+          s.stream_id,
+          s.name,
+          s.category_id,
+          s.stream_icon,
+          s.rating,
+          s.container_extension,
+          s.added_at,
+          r.last_played_at,
+          CASE WHEN f.item_id IS NULL THEN 0 ELSE 1 END AS favorite
+        FROM iptv_recent r
+        JOIN iptv_vod_streams s
+          ON s.account_id = r.account_id AND CAST(s.stream_id AS TEXT) = r.item_id
+        LEFT JOIN iptv_favorites f
+          ON f.account_id = s.account_id AND f.type = 'vod' AND f.item_id = CAST(s.stream_id AS TEXT)
+        WHERE r.account_id = ? AND r.type = 'vod' AND s.disabled = 0
+        ORDER BY r.last_played_at DESC
+        LIMIT ?
+      `,
+    )
+    .all(accountId, Number(limit ?? 30));
 }
 
 function dbSetIptvFavorite(accountId, type, itemId, value) {
@@ -1703,6 +1759,14 @@ const server = http.createServer(async (req, res) => {
         const body = await readBody(req);
         dbTouchIptvRecent(active.id, body.type, body.itemId ?? body.item_id);
         return json(res, { ok: true });
+      }
+
+      if (method === "GET" && pathname === "/api/iptv/active/recent") {
+        const active = dbGetActiveIptvAccount();
+        if (!active) return json(res, []);
+        const type = url.searchParams.get("type") ?? "live";
+        const limit = url.searchParams.get("limit") ?? "30";
+        return json(res, dbGetIptvRecent(active.id, type, limit));
       }
 
       if (method === "GET" && pathname === "/api/movies") {
