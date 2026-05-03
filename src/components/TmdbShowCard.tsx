@@ -7,7 +7,7 @@ export function TmdbShowCard({ item }: { item: TmdbSearchItem }) {
     <Link
       to="/serie/$tmdbId"
       params={{ tmdbId: String(item.id) }}
-      className="card-hover group relative aspect-[2/3] rounded-lg overflow-hidden bg-secondary border border-border/40"
+      className="card-hover group relative aspect-[2/3] rounded-2xl overflow-hidden bg-white/5 border border-border/40"
     >
       {item.poster ? (
         <img
@@ -26,7 +26,9 @@ export function TmdbShowCard({ item }: { item: TmdbSearchItem }) {
       <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/30 to-transparent opacity-90 group-hover:opacity-100 transition-opacity" />
 
       <div className="absolute inset-x-0 bottom-0 p-4 space-y-1">
-        <h3 className="font-display text-lg leading-tight line-clamp-2 text-cream">{item.title}</h3>
+        <h3 className="font-display text-lg leading-tight line-clamp-2 text-foreground">
+          {item.title}
+        </h3>
         {item.year && (
           <p className="text-[11px] text-muted-foreground tracking-wider">{item.year}</p>
         )}

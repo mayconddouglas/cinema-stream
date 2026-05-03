@@ -1,9 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Search as SearchIcon } from "lucide-react";
-import { Header } from "@/components/Header";
+import { AppBottomNav } from "@/components/AppBottomNav";
 import { TmdbMovieCard } from "@/components/TmdbMovieCard";
 import { TmdbShowCard } from "@/components/TmdbShowCard";
+import { TmdbCarouselRow } from "@/components/TmdbCarouselRow";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { Input } from "@/components/ui/input";
 import { getAll, type LibraryItem } from "@/lib/storage";
 import {
   tmdbPopular,
@@ -29,6 +32,7 @@ function SearchPage() {
   const [trending, setTrending] = useState<TmdbSearchItem[]>([]);
   const [popular, setPopular] = useState<TmdbSearchItem[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [viewAll, setViewAll] = useState<{ title: string; items: TmdbSearchItem[] } | null>(null);
 
   useEffect(() => {
     getAll().then(setLibrary);
@@ -108,65 +112,70 @@ function SearchPage() {
   const showCatalog = query.trim().length === 0;
 
   return (
-    <div className="min-h-screen">
-      <Header />
-
-      <main className="container mx-auto px-6 py-10 space-y-10">
-        <div className="space-y-3">
-          <h1 className="font-display text-4xl text-cream">Buscar</h1>
-          <div className="flex gap-1 bg-card/60 backdrop-blur border border-border/40 rounded-lg p-1 w-fit">
-            <button
-              onClick={() => setMode("movie")}
-              className={`rounded-md px-3 py-1.5 text-sm transition ${
-                mode === "movie"
-                  ? "bg-primary text-primary-foreground shadow-glow"
-                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-              }`}
-            >
-              Filmes
-            </button>
-            <button
-              onClick={() => setMode("tv")}
-              className={`rounded-md px-3 py-1.5 text-sm transition ${
-                mode === "tv"
-                  ? "bg-primary text-primary-foreground shadow-glow"
-                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-              }`}
-            >
-              Séries
-            </button>
+    <div className="min-h-screen pb-[92px]">
+      <div className="sticky top-0 z-30 border-b border-border/40 bg-background/70 backdrop-blur-xl">
+        <div className="mx-auto max-w-xl px-4 py-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs text-muted-foreground">Acervos de</p>
+              <h1 className="font-display text-3xl leading-none tracking-wide text-foreground truncate">
+                Buscar
+              </h1>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setMode("movie")}
+                className={
+                  mode === "movie"
+                    ? "shrink-0 rounded-full bg-primary/15 text-primary px-4 h-10 text-xs font-medium border border-primary/20"
+                    : "shrink-0 rounded-full bg-white/5 text-muted-foreground px-4 h-10 text-xs font-medium border border-border/40 hover:text-foreground hover:bg-white/10 transition"
+                }
+              >
+                Filmes
+              </button>
+              <button
+                onClick={() => setMode("tv")}
+                className={
+                  mode === "tv"
+                    ? "shrink-0 rounded-full bg-primary/15 text-primary px-4 h-10 text-xs font-medium border border-primary/20"
+                    : "shrink-0 rounded-full bg-white/5 text-muted-foreground px-4 h-10 text-xs font-medium border border-border/40 hover:text-foreground hover:bg-white/10 transition"
+                }
+              >
+                Séries
+              </button>
+            </div>
           </div>
-          <div className="relative w-full max-w-xl">
-            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <input
+
+          <div className="relative">
+            <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder={
-                mode === "tv"
-                  ? "Busque séries no TMDB (ex.: The Office, Dark)..."
-                  : "Busque filmes no TMDB (ex.: Interestelar, Matrix)..."
-              }
-              className="w-full rounded-md bg-card/60 backdrop-blur border border-border/40 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              placeholder={mode === "tv" ? "Buscar séries no TMDB..." : "Buscar filmes no TMDB..."}
+              className="pl-11"
             />
           </div>
-          {error && (
-            <p className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2 max-w-xl">
-              {error}
-            </p>
-          )}
-        </div>
 
+          {error ? (
+            <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <main className="mx-auto max-w-xl px-4 py-6 space-y-10">
         {!showCatalog && (
           <section className="space-y-4">
             <div className="flex items-center gap-2">
-              <h2 className="font-display text-2xl text-cream">Resultados</h2>
+              <h2 className="text-sm font-semibold text-foreground">Resultados</h2>
               {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
             </div>
 
             {results.length === 0 && !loading ? (
               <p className="text-sm text-muted-foreground">Nenhum resultado.</p>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              <div className="grid grid-cols-3 gap-3">
                 {results.map((r) =>
                   mode === "tv" ? (
                     <TmdbShowCard key={r.id} item={r} />
@@ -181,41 +190,74 @@ function SearchPage() {
 
         {showCatalog && (
           <>
-            <section className="space-y-4">
-              <div className="flex items-center gap-2">
-                <h2 className="font-display text-2xl text-cream">Em alta</h2>
-                {initialLoading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                {trending
-                  .slice(0, 18)
-                  .map((r) =>
-                    mode === "tv" ? (
-                      <TmdbShowCard key={r.id} item={r} />
-                    ) : (
-                      <TmdbMovieCard key={r.id} item={r} inLibrary={libraryIds.has(r.id)} />
-                    ),
-                  )}
-              </div>
-            </section>
-
-            <section className="space-y-4">
-              <h2 className="font-display text-2xl text-cream">Populares</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                {popular
-                  .slice(0, 18)
-                  .map((r) =>
-                    mode === "tv" ? (
-                      <TmdbShowCard key={r.id} item={r} />
-                    ) : (
-                      <TmdbMovieCard key={r.id} item={r} inLibrary={libraryIds.has(r.id)} />
-                    ),
-                  )}
-              </div>
-            </section>
+            {initialLoading ? (
+              <SearchLoading />
+            ) : (
+              <>
+                <TmdbCarouselRow
+                  title="Em alta"
+                  mode={mode}
+                  items={trending.slice(0, 18)}
+                  inLibraryIds={libraryIds}
+                  onViewAll={() => setViewAll({ title: "Em alta", items: trending })}
+                />
+                <TmdbCarouselRow
+                  title="Populares"
+                  mode={mode}
+                  items={popular.slice(0, 18)}
+                  inLibraryIds={libraryIds}
+                  onViewAll={() => setViewAll({ title: "Populares", items: popular })}
+                />
+              </>
+            )}
           </>
         )}
       </main>
+
+      <AppBottomNav />
+
+      <Drawer open={!!viewAll} onOpenChange={(o) => !o && setViewAll(null)}>
+        <DrawerContent className="rounded-t-3xl border-border/40 bg-background/95 backdrop-blur-xl">
+          <DrawerHeader className="text-left">
+            <DrawerTitle className="font-display text-2xl tracking-wide">
+              {viewAll?.title ?? ""}
+            </DrawerTitle>
+          </DrawerHeader>
+          <div className="px-4 pb-6">
+            <div className="grid grid-cols-3 gap-3">
+              {(viewAll?.items ?? []).map((r) =>
+                mode === "tv" ? (
+                  <TmdbShowCard key={r.id} item={r} />
+                ) : (
+                  <TmdbMovieCard key={r.id} item={r} inLibrary={libraryIds.has(r.id)} />
+                ),
+              )}
+            </div>
+          </div>
+        </DrawerContent>
+      </Drawer>
+    </div>
+  );
+}
+
+function SearchLoading() {
+  return (
+    <div className="space-y-8">
+      {Array.from({ length: 2 }).map((_, idx) => (
+        <div key={idx} className="space-y-3">
+          <div className="h-4 w-40 rounded bg-white/10 animate-pulse" />
+          <div className="-mx-4 px-4 overflow-x-hidden">
+            <div className="flex gap-3">
+              {Array.from({ length: 4 }).map((__, j) => (
+                <div
+                  key={j}
+                  className="w-[118px] aspect-[2/3] rounded-2xl border border-border/40 bg-white/5 animate-pulse"
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

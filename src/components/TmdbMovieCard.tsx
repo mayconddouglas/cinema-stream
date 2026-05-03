@@ -7,7 +7,7 @@ export function TmdbMovieCard({ item, inLibrary }: { item: TmdbSearchItem; inLib
     <Link
       to="/filme/$tmdbId"
       params={{ tmdbId: String(item.id) }}
-      className="card-hover group relative aspect-[2/3] rounded-lg overflow-hidden bg-secondary border border-border/40"
+      className="card-hover group relative aspect-[2/3] rounded-2xl overflow-hidden bg-white/5 border border-border/40"
     >
       {item.poster ? (
         <img
@@ -34,7 +34,9 @@ export function TmdbMovieCard({ item, inLibrary }: { item: TmdbSearchItem; inLib
       </div>
 
       <div className="absolute inset-x-0 bottom-0 p-4 space-y-1">
-        <h3 className="font-display text-lg leading-tight line-clamp-2 text-cream">{item.title}</h3>
+        <h3 className="font-display text-lg leading-tight line-clamp-2 text-foreground">
+          {item.title}
+        </h3>
         {item.year && (
           <p className="text-[11px] text-muted-foreground tracking-wider">{item.year}</p>
         )}
