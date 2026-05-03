@@ -5,6 +5,9 @@ import WebTorrent from "webtorrent";
 import Database from "better-sqlite3";
 
 const API_SECRET = process.env.API_SECRET ?? "";
+const XTREAM_USER = process.env.XTREAM_USER ?? "buffet";
+const XTREAM_PASS = process.env.XTREAM_PASS ?? "buffet123";
+const XTREAM_HOST = process.env.XTREAM_HOST ?? "";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 try {
@@ -478,6 +481,16 @@ function json(res, data, status = 200) {
   res.end(body);
 }
 
+function xtreamAuth(searchParams) {
+  const user = searchParams.get("username");
+  const pass = searchParams.get("password");
+  return user === XTREAM_USER && pass === XTREAM_PASS;
+}
+
+function xtreamUnauthorized(res) {
+  return json(res, { user_info: { auth: 0 } }, 401);
+}
+
 async function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = "";
@@ -671,6 +684,280 @@ const server = http.createServer(async (req, res) => {
         "Access-Control-Max-Age": "86400",
       });
       res.end();
+      return;
+    }
+
+    if (pathname === "/player_api.php" || pathname === "/get.php") {
+      const params = url.searchParams;
+      if (!xtreamAuth(params)) return xtreamUnauthorized(res);
+
+      const action = params.get("action") ?? "";
+
+      if (!action) {
+        const host = XTREAM_HOST || `http://${req.headers.host}`;
+        return json(res, {
+          user_info: {
+            username: XTREAM_USER,
+            password: XTREAM_PASS,
+            message: "Buffet de Vídeo",
+            auth: 1,
+            status: "Active",
+            exp_date: "9999999999",
+            is_trial: "0",
+            active_cons: "1",
+            created_at: "1700000000",
+            max_connections: "10",
+            allowed_output_formats: ["mkv", "mp4", "ts"],
+          },
+          server_info: {
+            url: host,
+            port: "80",
+            https_port: "443",
+            server_protocol: host.startsWith("https") ? "https" : "http",
+            rtmp_port: "1935",
+            timezone: "America/Sao_Paulo",
+            timestamp_now: Math.floor(Date.now() / 1000),
+            time_now: new Date().toISOString(),
+          },
+        });
+      }
+
+      if (action === "get_vod_categories") {
+        return json(res, [{ category_id: "1", category_name: "Filmes", parent_id: 0 }]);
+      }
+
+      if (action === "get_series_categories") {
+        return json(res, [{ category_id: "2", category_name: "Séries", parent_id: 0 }]);
+      }
+
+      if (action === "get_vod_streams") {
+        const host = XTREAM_HOST || `http://${req.headers.host}`;
+        const movies = dbGetAllMovies();
+        return json(
+          res,
+          movies.map((m) => ({
+            num: String(m.id).slice(0, 8),
+            name: m.title,
+            stream_type: "movie",
+            stream_id: encodeURIComponent(m.id),
+            stream_icon: m.poster ?? "",
+            rating: "8",
+            rating_5based: "4",
+            added: String(Math.floor((m.added_at ?? Date.now()) / 1000)),
+            category_id: "1",
+            container_extension: "mkv",
+            custom_sid: "",
+            direct_source: `${host}/xtream/movie/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(m.id)}.mkv`,
+          })),
+        );
+      }
+
+      if (action === "get_series") {
+        const list = dbGetAllSeries();
+        return json(
+          res,
+          list.map((s) => ({
+            num: s.tmdb_id,
+            name: s.title,
+            series_id: s.tmdb_id,
+            cover: s.poster ?? "",
+            plot: s.overview ?? "",
+            cast: "",
+            director: "",
+            genre: "Drama",
+            releaseDate: s.year ?? "",
+            last_modified: String(Math.floor((s.added_at ?? Date.now()) / 1000)),
+            rating: "8",
+            rating_5based: "4",
+            backdrop_path: [s.backdrop ?? ""],
+            youtube_trailer: "",
+            episode_run_time: "45",
+            category_id: "2",
+          })),
+        );
+      }
+
+      if (action === "get_series_info") {
+        const seriesId = Number(params.get("series_id"));
+        const host = XTREAM_HOST || `http://${req.headers.host}`;
+        const series = dbGetSeriesById(seriesId);
+        if (!series) return json(res, { error: "not_found" }, 404);
+
+        const episodes = dbGetEpisodesByShow(seriesId);
+        const seasons = {};
+
+        for (const ep of episodes) {
+          if (!ep.magnet) continue;
+          const sKey = String(ep.season);
+          if (!seasons[sKey]) seasons[sKey] = [];
+          seasons[sKey].push({
+            id: ep.id,
+            episode_num: ep.episode,
+            title: ep.name,
+            container_extension: "mkv",
+            info: {
+              movie_image: ep.still ?? "",
+              plot: ep.overview ?? "",
+              duration_secs: ep.runtime ? ep.runtime * 60 : 0,
+              duration: ep.runtime
+                ? `${Math.floor(ep.runtime / 60)}:${String(ep.runtime % 60).padStart(2, "0")}:00`
+                : "00:45:00",
+              releasedate: "",
+            },
+            added: String(Math.floor((ep.added_at ?? Date.now()) / 1000)),
+            season: ep.season,
+            direct_source: `${host}/xtream/series/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(ep.id)}.mkv`,
+            custom_sid: "",
+          });
+        }
+
+        return json(res, {
+          info: {
+            name: series.title,
+            cover: series.poster ?? "",
+            plot: series.overview ?? "",
+            cast: "",
+            director: "",
+            genre: "",
+            releaseDate: series.year ?? "",
+            backdrop_path: [series.backdrop ?? ""],
+            rating_5based: "4",
+            youtube_trailer: "",
+            episode_run_time: "45",
+            category_id: "2",
+          },
+          episodes: seasons,
+        });
+      }
+
+      if (action === "get_vod_info") {
+        const streamId = decodeURIComponent(params.get("vod_id") ?? "");
+        const movie = dbGetMovieById(streamId);
+        if (!movie) return json(res, { error: "not_found" }, 404);
+        return json(res, {
+          info: {
+            name: movie.title,
+            o_name: movie.title,
+            cover_big: movie.poster ?? "",
+            movie_image: movie.poster ?? "",
+            releasedate: movie.year ?? "",
+            youtube_trailer: "",
+            director: "",
+            actors: "",
+            cast: "",
+            description: movie.description ?? "",
+            plot: movie.description ?? "",
+            genre: "",
+            duration_secs: movie.duration ?? 0,
+            duration: "120:00",
+            bitrate: 0,
+            rating: "8",
+            backdrop_path: [movie.backdrop ?? ""],
+          },
+          movie_data: {
+            stream_id: encodeURIComponent(movie.id),
+            name: movie.title,
+            added: String(Math.floor((movie.added_at ?? Date.now()) / 1000)),
+            category_id: "1",
+            container_extension: "mkv",
+            custom_sid: "",
+            direct_source: "",
+          },
+        });
+      }
+
+      return json(res, { error: "unknown_action" }, 400);
+    }
+
+    if (/^\/xtream\/movie\/[^/]+\/[^/]+\/[^/]+$/.test(pathname)) {
+      const parts = pathname.split("/");
+      const user = parts[3];
+      const pass = parts[4];
+      const movieIdRaw = parts[5].replace(/\.(mkv|mp4|avi|ts)$/i, "");
+      const movieId = decodeURIComponent(movieIdRaw);
+
+      if (user !== XTREAM_USER || pass !== XTREAM_PASS) {
+        res.writeHead(401);
+        res.end("Unauthorized");
+        return;
+      }
+
+      const movie = dbGetMovieById(movieId);
+      if (!movie) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+
+      const streamUrl = `/stream?magnet=${encodeURIComponent(movie.magnet)}&index=${movie.file_index ?? 0}`;
+      res.writeHead(302, { Location: streamUrl });
+      res.end();
+      return;
+    }
+
+    if (/^\/xtream\/series\/[^/]+\/[^/]+\/[^/]+$/.test(pathname)) {
+      const parts = pathname.split("/");
+      const user = parts[3];
+      const pass = parts[4];
+      const epIdRaw = parts[5].replace(/\.(mkv|mp4|avi|ts)$/i, "");
+      const epId = decodeURIComponent(epIdRaw);
+
+      if (user !== XTREAM_USER || pass !== XTREAM_PASS) {
+        res.writeHead(401);
+        res.end("Unauthorized");
+        return;
+      }
+
+      const ep = db.prepare("SELECT * FROM episodes WHERE id = ?").get(epId);
+      if (!ep || !ep.magnet) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+
+      const streamUrl = `/stream?magnet=${encodeURIComponent(ep.magnet)}&index=${ep.file_index ?? 0}`;
+      res.writeHead(302, { Location: streamUrl });
+      res.end();
+      return;
+    }
+
+    if (pathname === "/playlist.m3u") {
+      const params = url.searchParams;
+      if (!xtreamAuth(params)) {
+        res.writeHead(401);
+        res.end("Unauthorized");
+        return;
+      }
+
+      const host = XTREAM_HOST || `http://${req.headers.host}`;
+      const movies = dbGetAllMovies();
+      const episodes = db
+        .prepare(
+          "SELECT e.*, s.title as show_title FROM episodes e JOIN series s ON e.show_tmdb_id = s.tmdb_id WHERE e.magnet IS NOT NULL",
+        )
+        .all();
+
+      let m3u = "#EXTM3U\n";
+
+      for (const m of movies) {
+        const streamUrl = `${host}/xtream/movie/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(m.id)}.mkv`;
+        m3u += `#EXTINF:-1 tvg-logo="${m.poster ?? ""}" group-title="Filmes",${m.title}${m.year ? ` (${m.year})` : ""}\n`;
+        m3u += `${streamUrl}\n`;
+      }
+
+      for (const ep of episodes) {
+        const streamUrl = `${host}/xtream/series/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(ep.id)}.mkv`;
+        const label = `${ep.show_title} S${String(ep.season).padStart(2, "0")}E${String(ep.episode).padStart(2, "0")} - ${ep.name}`;
+        m3u += `#EXTINF:-1 tvg-logo="${ep.still ?? ""}" group-title="${ep.show_title}",${label}\n`;
+        m3u += `${streamUrl}\n`;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "audio/x-mpegurl; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="buffet.m3u"',
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.end(m3u);
       return;
     }
 
