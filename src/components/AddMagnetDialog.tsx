@@ -61,9 +61,9 @@ export function AddMagnetDialog({
   const [tmdbSelectedId, setTmdbSelectedId] = useState<number | null>(null);
   const [probeLoading, setProbeLoading] = useState(false);
   const [detectedFiles, setDetectedFiles] = useState<DetectedFile[]>([]);
-  const [selectedFiles, setSelectedFiles] = useState<Set<number>>(new Set());
   const [mode, setMode] = useState<"single" | "pack">("single");
-  const [packImporting, setPackImporting] = useState(false);
+  const [singleFileIndex, setSingleFileIndex] = useState<number | null>(null);
+  const [singleFileName, setSingleFileName] = useState<string>("");
 
   const parsedMagnet = useMemo(() => parseMagnet(magnet), [magnet]);
 
@@ -129,8 +129,9 @@ export function AddMagnetDialog({
 
     setProbeLoading(true);
     setDetectedFiles([]);
-    setSelectedFiles(new Set());
     setMode("single");
+    setSingleFileIndex(null);
+    setSingleFileName("");
     setError(null);
 
     try {
@@ -197,7 +198,6 @@ export function AddMagnetDialog({
 
       setMode("pack");
       setDetectedFiles(videoFiles);
-      setSelectedFiles(new Set(videoFiles.map((f) => f.index)));
 
       videoFiles.forEach((file, i) => {
         void searchTmdbForFile(file.cleanTitle, i);
@@ -215,7 +215,8 @@ export function AddMagnetDialog({
     setMagnet(v);
     setMode("single");
     setDetectedFiles([]);
-    setSelectedFiles(new Set());
+    setSingleFileIndex(null);
+    setSingleFileName("");
     const parsed = parseMagnet(v);
     if (parsed.name && !title) setTitle(parsed.name);
     if (v.trim().startsWith("magnet:?")) {
@@ -224,6 +225,21 @@ export function AddMagnetDialog({
         void probeAndDetect(v);
       }, 800);
     }
+  };
+
+  const chooseFileFromPack = (file: DetectedFile) => {
+    setMode("single");
+    setSingleFileIndex(file.index);
+    setSingleFileName(file.name);
+    setError(null);
+    setTitle(file.customTitle || file.cleanTitle);
+    setPoster(file.poster || "");
+    setBackdrop(file.backdrop || "");
+    setYear(file.year || "");
+    setDescription(file.description || "");
+    setTmdbResults([]);
+    setTmdbSelectedId(file.tmdbId ?? null);
+    setImdbId("");
   };
 
   const searchOnTmdb = async () => {
@@ -268,60 +284,6 @@ export function AddMagnetDialog({
     }
   };
 
-  const submitPack = async () => {
-    const toImport = detectedFiles.filter((f) => selectedFiles.has(f.index));
-    if (toImport.length === 0) return;
-
-    const parsed = parseMagnet(magnet);
-    if (!parsed.infoHash) {
-      setError("Magnet inválido.");
-      return;
-    }
-
-    setPackImporting(true);
-    setError(null);
-
-    try {
-      let allItems: LibraryItem[] = [];
-
-      for (const file of toImport) {
-        const itemId = `${parsed.infoHash}-f${file.index}`;
-        const item: LibraryItem = {
-          id: itemId,
-          title: file.customTitle || file.cleanTitle,
-          magnet: magnet.trim(),
-          fileIndex: file.index,
-          poster: file.poster || undefined,
-          backdrop: file.backdrop || undefined,
-          description: file.description || undefined,
-          year: file.year || undefined,
-          tmdbId: file.tmdbId ?? undefined,
-          addedAt: Date.now(),
-        };
-        allItems = await upsert(item);
-      }
-
-      onAdded(allItems);
-      setMagnet("");
-      setTitle("");
-      setPoster("");
-      setBackdrop("");
-      setImdbId("");
-      setDescription("");
-      setYear("");
-      setTmdbResults([]);
-      setTmdbSelectedId(null);
-      setDetectedFiles([]);
-      setSelectedFiles(new Set());
-      setMode("single");
-      onClose();
-    } catch {
-      setError("Falha ao salvar os filmes. Tente novamente.");
-    } finally {
-      setPackImporting(false);
-    }
-  };
-
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -331,8 +293,12 @@ export function AddMagnetDialog({
       return;
     }
     const finalTitle = title.trim() || parsed.name || "Sem título";
+    const itemId =
+      typeof singleFileIndex === "number"
+        ? `${parsed.infoHash}-f${singleFileIndex}`
+        : parsed.infoHash;
     const item: LibraryItem = {
-      id: parsed.infoHash,
+      id: itemId,
       title: finalTitle,
       magnet,
       poster: poster.trim() || undefined,
@@ -341,6 +307,7 @@ export function AddMagnetDialog({
       year: year.trim() || undefined,
       tmdbId: tmdbSelectedId ?? undefined,
       imdbId: imdbId.trim() || undefined,
+      fileIndex: typeof singleFileIndex === "number" ? singleFileIndex : undefined,
       addedAt: Date.now(),
     };
     const items = await upsert(item);
@@ -354,6 +321,8 @@ export function AddMagnetDialog({
     setYear("");
     setTmdbResults([]);
     setTmdbSelectedId(null);
+    setSingleFileIndex(null);
+    setSingleFileName("");
     onClose();
   };
 
@@ -403,147 +372,66 @@ export function AddMagnetDialog({
 
         {mode === "pack" && detectedFiles.length > 0 && (
           <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-0.5">
-                <p className="text-sm font-medium text-foreground">
-                  {detectedFiles.length} filmes detectados neste torrent
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Selecione quais deseja adicionar à biblioteca
-                </p>
-              </div>
-              <div className="flex gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setSelectedFiles(new Set(detectedFiles.map((f) => f.index)))}
-                  className="text-xs text-primary hover:underline"
-                >
-                  Todos
-                </button>
-                <span className="text-muted-foreground text-xs">·</span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedFiles(new Set())}
-                  className="text-xs text-muted-foreground hover:underline"
-                >
-                  Nenhum
-                </button>
-              </div>
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium text-foreground">
+                {detectedFiles.length} filmes detectados neste torrent
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Toque em “Adicionar” em um deles para preencher as informações
+              </p>
             </div>
 
             <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-              {detectedFiles.map((file, i) => (
+              {detectedFiles.map((file) => (
                 <div
                   key={file.index}
-                  onClick={() => {
-                    setSelectedFiles((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(file.index)) next.delete(file.index);
-                      else next.add(file.index);
-                      return next;
-                    });
-                  }}
-                  className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition select-none ${
-                    selectedFiles.has(file.index)
-                      ? "border-primary bg-primary/10"
-                      : "border-border/40 bg-background/40 hover:bg-background/60"
-                  }`}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/40 px-3 py-2.5"
                 >
-                  <div
-                    className={`h-4 w-4 shrink-0 rounded border-2 flex items-center justify-center transition ${
-                      selectedFiles.has(file.index)
-                        ? "bg-primary border-primary"
-                        : "border-muted-foreground/40"
-                    }`}
+                  <div className="min-w-0">
+                    <div className="text-sm text-foreground line-clamp-1">
+                      {file.tmdbLoading
+                        ? "Buscando no TMDB..."
+                        : file.customTitle || file.cleanTitle}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {file.year ? `${file.year} · ` : ""}
+                      {(file.length / (1024 * 1024 * 1024)).toFixed(1)} GB
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => chooseFileFromPack(file)}
+                    className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 transition min-h-[40px]"
                   >
-                    {selectedFiles.has(file.index) && (
-                      <svg viewBox="0 0 10 8" className="h-2.5 w-2.5 fill-primary-foreground">
-                        <path
-                          d="M1 4l3 3 5-6"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          fill="none"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    )}
-                  </div>
-
-                  <div className="h-12 w-9 shrink-0 rounded overflow-hidden bg-secondary">
-                    {file.tmdbLoading ? (
-                      <div className="h-full w-full flex items-center justify-center">
-                        <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-                      </div>
-                    ) : file.poster ? (
-                      <img src={file.poster} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="h-full w-full bg-secondary flex items-center justify-center">
-                        <Film className="h-4 w-4 text-muted-foreground/30" />
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    {file.tmdbLoading ? (
-                      <div className="space-y-1.5">
-                        <div className="h-3 w-3/4 bg-muted-foreground/20 rounded animate-pulse" />
-                        <div className="h-2.5 w-1/3 bg-muted-foreground/10 rounded animate-pulse" />
-                      </div>
-                    ) : (
-                      <>
-                        <p className="text-sm font-medium text-foreground line-clamp-1">
-                          {file.customTitle || file.cleanTitle}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {file.year && <span>{file.year} · </span>}
-                          {(file.length / (1024 * 1024 * 1024)).toFixed(1)} GB
-                        </p>
-                      </>
-                    )}
-                  </div>
-
-                  {selectedFiles.has(file.index) && !file.tmdbLoading && (
-                    <input
-                      value={file.customTitle}
-                      onChange={(e) => {
-                        e.stopPropagation();
-                        const val = e.target.value;
-                        setDetectedFiles((prev) =>
-                          prev.map((f, idx) => (idx === i ? { ...f, customTitle: val } : f)),
-                        );
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                      placeholder="Título personalizado"
-                      className="w-28 rounded-md bg-background/60 border border-border/40 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring shrink-0"
-                    />
-                  )}
+                    Adicionar
+                  </button>
                 </div>
               ))}
             </div>
-
-            <button
-              type="button"
-              onClick={() => void submitPack()}
-              disabled={packImporting || selectedFiles.size === 0}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary py-3 text-sm font-medium text-primary-foreground hover:brightness-110 transition disabled:opacity-50 min-h-[48px]"
-            >
-              {packImporting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Plus className="h-4 w-4" />
-              )}
-              Adicionar{" "}
-              {selectedFiles.size > 0
-                ? `${selectedFiles.size} filme${selectedFiles.size > 1 ? "s" : ""}`
-                : ""}{" "}
-              à biblioteca
-            </button>
           </div>
         )}
 
         {mode === "single" && (
           <>
+            {typeof singleFileIndex === "number" && detectedFiles.length > 0 && (
+              <div className="rounded-lg border border-border/40 bg-secondary/30 px-3 py-2 flex items-center justify-between gap-3">
+                <div className="text-xs text-muted-foreground min-w-0">
+                  Arquivo selecionado:{" "}
+                  <span className="font-mono text-foreground">{singleFileIndex}</span>{" "}
+                  <span className="truncate">{singleFileName}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("pack");
+                    setError(null);
+                  }}
+                  className="text-xs text-primary hover:underline shrink-0"
+                >
+                  Trocar
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2">
                 <Field label="Título">
