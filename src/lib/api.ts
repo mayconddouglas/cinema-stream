@@ -203,3 +203,116 @@ export async function migrateLocalStorageToServer(): Promise<{
 
   return { movies, series, episodes };
 }
+
+export async function iptvGetAccounts(): Promise<unknown[]> {
+  const res = await fetch(`${getProxyBase()}/api/iptv/accounts`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`api_iptv_accounts_${res.status}`);
+  return res.json() as Promise<unknown[]>;
+}
+
+export async function iptvCreateAccount(payload: unknown): Promise<unknown> {
+  const res = await fetch(`${getProxyBase()}/api/iptv/accounts`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`api_iptv_create_${res.status}`);
+  return res.json();
+}
+
+export async function iptvActivateAccount(id: number): Promise<unknown> {
+  const res = await fetch(`${getProxyBase()}/api/iptv/accounts/${id}/activate`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`api_iptv_activate_${res.status}`);
+  return res.json();
+}
+
+export async function iptvGetActiveStatus(): Promise<unknown> {
+  const res = await fetch(`${getProxyBase()}/api/iptv/active/status`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`api_iptv_status_${res.status}`);
+  return res.json();
+}
+
+export async function iptvGetLiveCategories(): Promise<unknown[]> {
+  const res = await fetch(`${getProxyBase()}/api/iptv/active/live/categories`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`api_iptv_live_categories_${res.status}`);
+  return res.json() as Promise<unknown[]>;
+}
+
+export async function iptvGetLiveStreams(params: {
+  categoryId?: string;
+  q?: string;
+  onlyFavorites?: boolean;
+}): Promise<unknown[]> {
+  const url = new URL(`${getProxyBase()}/api/iptv/active/live/streams`);
+  if (params.categoryId) url.searchParams.set("category_id", params.categoryId);
+  if (params.q) url.searchParams.set("q", params.q);
+  if (params.onlyFavorites) url.searchParams.set("onlyFavorites", "1");
+  const res = await fetch(url.toString(), { headers: authHeaders() });
+  if (!res.ok) throw new Error(`api_iptv_live_streams_${res.status}`);
+  return res.json() as Promise<unknown[]>;
+}
+
+export async function iptvGetVodCategories(): Promise<unknown[]> {
+  const res = await fetch(`${getProxyBase()}/api/iptv/active/vod/categories`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`api_iptv_vod_categories_${res.status}`);
+  return res.json() as Promise<unknown[]>;
+}
+
+export async function iptvGetVodStreams(params: {
+  categoryId?: string;
+  q?: string;
+  onlyFavorites?: boolean;
+}): Promise<unknown[]> {
+  const url = new URL(`${getProxyBase()}/api/iptv/active/vod/streams`);
+  if (params.categoryId) url.searchParams.set("category_id", params.categoryId);
+  if (params.q) url.searchParams.set("q", params.q);
+  if (params.onlyFavorites) url.searchParams.set("onlyFavorites", "1");
+  const res = await fetch(url.toString(), { headers: authHeaders() });
+  if (!res.ok) throw new Error(`api_iptv_vod_streams_${res.status}`);
+  return res.json() as Promise<unknown[]>;
+}
+
+export async function iptvSetFavorite(payload: {
+  type: "live" | "vod";
+  itemId: string;
+  value: boolean;
+}): Promise<unknown> {
+  const res = await fetch(`${getProxyBase()}/api/iptv/active/favorite`, {
+    method: "PATCH",
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`api_iptv_favorite_${res.status}`);
+  return res.json();
+}
+
+export async function iptvTouchRecent(payload: { type: "live" | "vod"; itemId: string }) {
+  const res = await fetch(`${getProxyBase()}/api/iptv/active/recent`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`api_iptv_recent_${res.status}`);
+  return res.json();
+}
+
+export function iptvLiveRelayUrl(streamId: string | number): string {
+  const token = getApiSecret();
+  const base = getProxyBase();
+  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `${base}/iptv/active/relay/live/${encodeURIComponent(String(streamId))}.ts${qs}`;
+}
+
+export function iptvVodRelayUrl(streamId: string | number): string {
+  const token = getApiSecret();
+  const base = getProxyBase();
+  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `${base}/iptv/active/relay/vod/${encodeURIComponent(String(streamId))}.ts${qs}`;
+}

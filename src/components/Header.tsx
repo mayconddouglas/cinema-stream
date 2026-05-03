@@ -18,6 +18,13 @@ export function Header({ onAdd }: { onAdd?: () => void }) {
         </Link>
         <div className="flex items-center gap-2">
           <Link
+            to="/iptv"
+            className="inline-flex items-center gap-2 rounded-md bg-secondary px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition"
+          >
+            <Tv className="h-4 w-4" />
+            TV
+          </Link>
+          <Link
             to="/buscar"
             className="inline-flex items-center gap-2 rounded-md bg-secondary px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition"
           >
@@ -30,7 +37,7 @@ export function Header({ onAdd }: { onAdd?: () => void }) {
             title="Conectar no IPTV"
           >
             <Tv className="h-4 w-4" />
-            <span className="hidden sm:inline text-xs">IPTV</span>
+            <span className="hidden sm:inline text-xs">Conectar</span>
           </button>
           {onAdd && (
             <button

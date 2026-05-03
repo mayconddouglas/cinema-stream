@@ -1,6 +1,8 @@
 import http from "node:http";
 import { execFile, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
+import { Readable } from "node:stream";
 import WebTorrent from "webtorrent";
 import Database from "better-sqlite3";
 
@@ -8,12 +10,42 @@ const API_SECRET = process.env.API_SECRET ?? "";
 const XTREAM_USER = process.env.XTREAM_USER ?? "buffet";
 const XTREAM_PASS = process.env.XTREAM_PASS ?? "buffet123";
 const XTREAM_HOST = process.env.XTREAM_HOST ?? "";
+const IPTV_CRYPT_KEY = process.env.IPTV_CRYPT_KEY ?? API_SECRET;
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 try {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 } catch {
   void 0;
+}
+
+function encryptSecret(value) {
+  const raw = String(value ?? "");
+  if (!IPTV_CRYPT_KEY) return raw;
+  const iv = crypto.randomBytes(12);
+  const key = crypto.createHash("sha256").update(IPTV_CRYPT_KEY).digest();
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const enc = Buffer.concat([cipher.update(raw, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString("base64")}.${tag.toString("base64")}.${enc.toString("base64")}`;
+}
+
+function decryptSecret(value) {
+  const raw = String(value ?? "");
+  if (!IPTV_CRYPT_KEY) return raw;
+  const [ivB64, tagB64, dataB64] = raw.split(".");
+  if (!ivB64 || !tagB64 || !dataB64) return raw;
+  try {
+    const iv = Buffer.from(ivB64, "base64");
+    const tag = Buffer.from(tagB64, "base64");
+    const data = Buffer.from(dataB64, "base64");
+    const key = crypto.createHash("sha256").update(IPTV_CRYPT_KEY).digest();
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+  } catch {
+    return raw;
+  }
 }
 
 const db = new Database(`${DATA_DIR}/library.db`);
@@ -69,6 +101,97 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_episodes_show ON episodes(show_tmdb_id);
   CREATE INDEX IF NOT EXISTS idx_movies_added ON movies(added_at DESC);
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS iptv_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    username TEXT NOT NULL,
+    password_enc TEXT NOT NULL,
+    enabled INTEGER DEFAULT 1,
+    is_active INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_sync_at INTEGER DEFAULT 0,
+    last_live_sync_at INTEGER DEFAULT 0,
+    last_vod_sync_at INTEGER DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS iptv_live_categories (
+    account_id INTEGER NOT NULL,
+    category_id TEXT NOT NULL,
+    category_name TEXT NOT NULL,
+    parent_id TEXT,
+    last_seen_at INTEGER NOT NULL,
+    disabled INTEGER DEFAULT 0,
+    PRIMARY KEY (account_id, category_id),
+    FOREIGN KEY (account_id) REFERENCES iptv_accounts(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS iptv_live_streams (
+    account_id INTEGER NOT NULL,
+    stream_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    category_id TEXT,
+    stream_icon TEXT,
+    epg_channel_id TEXT,
+    added_at INTEGER,
+    last_seen_at INTEGER NOT NULL,
+    disabled INTEGER DEFAULT 0,
+    PRIMARY KEY (account_id, stream_id),
+    FOREIGN KEY (account_id) REFERENCES iptv_accounts(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS iptv_vod_categories (
+    account_id INTEGER NOT NULL,
+    category_id TEXT NOT NULL,
+    category_name TEXT NOT NULL,
+    parent_id TEXT,
+    last_seen_at INTEGER NOT NULL,
+    disabled INTEGER DEFAULT 0,
+    PRIMARY KEY (account_id, category_id),
+    FOREIGN KEY (account_id) REFERENCES iptv_accounts(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS iptv_vod_streams (
+    account_id INTEGER NOT NULL,
+    stream_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    category_id TEXT,
+    stream_icon TEXT,
+    rating TEXT,
+    added_at INTEGER,
+    container_extension TEXT,
+    last_seen_at INTEGER NOT NULL,
+    disabled INTEGER DEFAULT 0,
+    PRIMARY KEY (account_id, stream_id),
+    FOREIGN KEY (account_id) REFERENCES iptv_accounts(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS iptv_favorites (
+    account_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (account_id, type, item_id),
+    FOREIGN KEY (account_id) REFERENCES iptv_accounts(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS iptv_recent (
+    account_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    last_played_at INTEGER NOT NULL,
+    PRIMARY KEY (account_id, type, item_id),
+    FOREIGN KEY (account_id) REFERENCES iptv_accounts(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_iptv_live_cat ON iptv_live_categories(account_id, disabled, category_name);
+  CREATE INDEX IF NOT EXISTS idx_iptv_live_streams_cat ON iptv_live_streams(account_id, disabled, category_id, name);
+  CREATE INDEX IF NOT EXISTS idx_iptv_vod_cat ON iptv_vod_categories(account_id, disabled, category_name);
+  CREATE INDEX IF NOT EXISTS idx_iptv_vod_streams_cat ON iptv_vod_streams(account_id, disabled, category_id, name);
 `);
 
 // ── MOVIES ──────────────────────────────────────────
@@ -290,6 +413,467 @@ function seriesToClient(row) {
     backdrop: row.backdrop ?? null,
     addedAt: row.added_at,
   };
+}
+
+function normalizeBaseUrl(raw) {
+  return String(raw ?? "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+const iptvSyncState = new Map();
+
+function dbGetIptvAccounts() {
+  return db
+    .prepare(
+      "SELECT id, name, base_url, username, enabled, is_active, created_at, updated_at, last_sync_at FROM iptv_accounts ORDER BY created_at DESC",
+    )
+    .all();
+}
+
+function dbGetIptvAccountById(id) {
+  return db.prepare("SELECT * FROM iptv_accounts WHERE id = ?").get(id) ?? null;
+}
+
+function dbGetActiveIptvAccount() {
+  const row = db
+    .prepare("SELECT * FROM iptv_accounts WHERE is_active = 1 AND enabled = 1 LIMIT 1")
+    .get();
+  return row ?? null;
+}
+
+function dbCreateIptvAccount(account) {
+  const now = Date.now();
+  const name = String(account?.name ?? "").trim() || "IPTV";
+  const baseUrl = normalizeBaseUrl(account?.baseUrl ?? account?.base_url ?? "");
+  const username = String(account?.username ?? "").trim();
+  const password = String(account?.password ?? "").trim();
+  if (!baseUrl || !username || !password) return null;
+
+  const info = db
+    .prepare(
+      "INSERT INTO iptv_accounts (name, base_url, username, password_enc, enabled, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 0, ?, ?)",
+    )
+    .run(name, baseUrl, username, encryptSecret(password), now, now);
+  return dbGetIptvAccountById(info.lastInsertRowid);
+}
+
+function dbActivateIptvAccount(id) {
+  const now = Date.now();
+  db.prepare("UPDATE iptv_accounts SET is_active = 0, updated_at = ? WHERE is_active = 1").run(now);
+  db.prepare("UPDATE iptv_accounts SET is_active = 1, updated_at = ? WHERE id = ?").run(now, id);
+  return dbGetActiveIptvAccount();
+}
+
+function iptvAccountToClient(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    baseUrl: row.base_url,
+    username: row.username,
+    enabled: row.enabled === 1,
+    isActive: row.is_active === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastSyncAt: row.last_sync_at ?? 0,
+  };
+}
+
+function iptvGetSecrets(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    baseUrl: normalizeBaseUrl(row.base_url),
+    username: row.username,
+    password: decryptSecret(row.password_enc),
+  };
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 30_000) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function iptvFetch(account, action, extra) {
+  const base = account.baseUrl;
+  const url = new URL(`${base}/player_api.php`);
+  url.searchParams.set("username", account.username);
+  url.searchParams.set("password", account.password);
+  if (action) url.searchParams.set("action", action);
+  if (extra && typeof extra === "object") {
+    for (const [k, v] of Object.entries(extra)) {
+      if (v === undefined || v === null) continue;
+      url.searchParams.set(k, String(v));
+    }
+  }
+  return fetchJsonWithTimeout(url.toString(), 45_000);
+}
+
+function dbUpsertLiveCategories(accountId, categories, now) {
+  const stmt = db.prepare(
+    `
+      INSERT INTO iptv_live_categories (account_id, category_id, category_name, parent_id, last_seen_at, disabled)
+      VALUES (@account_id, @category_id, @category_name, @parent_id, @last_seen_at, 0)
+      ON CONFLICT(account_id, category_id) DO UPDATE SET
+        category_name = excluded.category_name,
+        parent_id = COALESCE(excluded.parent_id, parent_id),
+        last_seen_at = excluded.last_seen_at,
+        disabled = 0
+    `,
+  );
+  const tx = db.transaction((rows) => {
+    for (const c of rows) {
+      stmt.run({
+        account_id: accountId,
+        category_id: String(c.category_id ?? c.categoryId ?? ""),
+        category_name: String(c.category_name ?? c.categoryName ?? ""),
+        parent_id: c.parent_id ?? c.parentId ?? null,
+        last_seen_at: now,
+      });
+    }
+  });
+  tx(categories);
+  db.prepare(
+    "UPDATE iptv_live_categories SET disabled = 1 WHERE account_id = ? AND last_seen_at < ?",
+  ).run(accountId, now);
+}
+
+function dbUpsertLiveStreams(accountId, streams, now) {
+  const stmt = db.prepare(
+    `
+      INSERT INTO iptv_live_streams (account_id, stream_id, name, category_id, stream_icon, epg_channel_id, added_at, last_seen_at, disabled)
+      VALUES (@account_id, @stream_id, @name, @category_id, @stream_icon, @epg_channel_id, @added_at, @last_seen_at, 0)
+      ON CONFLICT(account_id, stream_id) DO UPDATE SET
+        name = excluded.name,
+        category_id = COALESCE(excluded.category_id, category_id),
+        stream_icon = COALESCE(excluded.stream_icon, stream_icon),
+        epg_channel_id = COALESCE(excluded.epg_channel_id, epg_channel_id),
+        last_seen_at = excluded.last_seen_at,
+        disabled = 0
+    `,
+  );
+  const tx = db.transaction((rows) => {
+    for (const s of rows) {
+      const streamId = Number(s.stream_id ?? s.streamId ?? 0);
+      if (!streamId) continue;
+      stmt.run({
+        account_id: accountId,
+        stream_id: streamId,
+        name: String(s.name ?? ""),
+        category_id: s.category_id ?? s.categoryId ?? null,
+        stream_icon: s.stream_icon ?? s.streamIcon ?? null,
+        epg_channel_id: s.epg_channel_id ?? s.epgChannelId ?? null,
+        added_at: s.added ? Number(s.added) * 1000 : null,
+        last_seen_at: now,
+      });
+    }
+  });
+  tx(streams);
+  db.prepare(
+    "UPDATE iptv_live_streams SET disabled = 1 WHERE account_id = ? AND last_seen_at < ?",
+  ).run(accountId, now);
+}
+
+function dbUpsertVodCategories(accountId, categories, now) {
+  const stmt = db.prepare(
+    `
+      INSERT INTO iptv_vod_categories (account_id, category_id, category_name, parent_id, last_seen_at, disabled)
+      VALUES (@account_id, @category_id, @category_name, @parent_id, @last_seen_at, 0)
+      ON CONFLICT(account_id, category_id) DO UPDATE SET
+        category_name = excluded.category_name,
+        parent_id = COALESCE(excluded.parent_id, parent_id),
+        last_seen_at = excluded.last_seen_at,
+        disabled = 0
+    `,
+  );
+  const tx = db.transaction((rows) => {
+    for (const c of rows) {
+      stmt.run({
+        account_id: accountId,
+        category_id: String(c.category_id ?? c.categoryId ?? ""),
+        category_name: String(c.category_name ?? c.categoryName ?? ""),
+        parent_id: c.parent_id ?? c.parentId ?? null,
+        last_seen_at: now,
+      });
+    }
+  });
+  tx(categories);
+  db.prepare(
+    "UPDATE iptv_vod_categories SET disabled = 1 WHERE account_id = ? AND last_seen_at < ?",
+  ).run(accountId, now);
+}
+
+function dbUpsertVodStreams(accountId, streams, now) {
+  const stmt = db.prepare(
+    `
+      INSERT INTO iptv_vod_streams (account_id, stream_id, name, category_id, stream_icon, rating, added_at, container_extension, last_seen_at, disabled)
+      VALUES (@account_id, @stream_id, @name, @category_id, @stream_icon, @rating, @added_at, @container_extension, @last_seen_at, 0)
+      ON CONFLICT(account_id, stream_id) DO UPDATE SET
+        name = excluded.name,
+        category_id = COALESCE(excluded.category_id, category_id),
+        stream_icon = COALESCE(excluded.stream_icon, stream_icon),
+        rating = COALESCE(excluded.rating, rating),
+        container_extension = COALESCE(excluded.container_extension, container_extension),
+        last_seen_at = excluded.last_seen_at,
+        disabled = 0
+    `,
+  );
+  const tx = db.transaction((rows) => {
+    for (const s of rows) {
+      const streamId = Number(s.stream_id ?? s.streamId ?? 0);
+      if (!streamId) continue;
+      stmt.run({
+        account_id: accountId,
+        stream_id: streamId,
+        name: String(s.name ?? ""),
+        category_id: s.category_id ?? s.categoryId ?? null,
+        stream_icon: s.stream_icon ?? s.streamIcon ?? null,
+        rating: s.rating ?? null,
+        added_at: s.added ? Number(s.added) * 1000 : null,
+        container_extension: s.container_extension ?? s.containerExtension ?? null,
+        last_seen_at: now,
+      });
+    }
+  });
+  tx(streams);
+  db.prepare(
+    "UPDATE iptv_vod_streams SET disabled = 1 WHERE account_id = ? AND last_seen_at < ?",
+  ).run(accountId, now);
+}
+
+async function syncIptvAccount(accountId) {
+  const row = dbGetIptvAccountById(accountId);
+  if (!row || row.enabled !== 1) return { ok: false, error: "not_found" };
+  const account = iptvGetSecrets(row);
+  if (!account) return { ok: false, error: "not_found" };
+  const now = Date.now();
+
+  iptvSyncState.set(accountId, { syncing: true, startedAt: now, error: null });
+  try {
+    const [liveCats, liveStreams, vodCats, vodStreams] = await Promise.all([
+      iptvFetch(account, "get_live_categories"),
+      iptvFetch(account, "get_live_streams"),
+      iptvFetch(account, "get_vod_categories"),
+      iptvFetch(account, "get_vod_streams"),
+    ]);
+
+    if (Array.isArray(liveCats)) dbUpsertLiveCategories(accountId, liveCats, now);
+    if (Array.isArray(liveStreams)) dbUpsertLiveStreams(accountId, liveStreams, now);
+    if (Array.isArray(vodCats)) dbUpsertVodCategories(accountId, vodCats, now);
+    if (Array.isArray(vodStreams)) dbUpsertVodStreams(accountId, vodStreams, now);
+
+    db.prepare(
+      "UPDATE iptv_accounts SET last_sync_at = ?, last_live_sync_at = ?, last_vod_sync_at = ?, updated_at = ? WHERE id = ?",
+    ).run(now, now, now, now, accountId);
+
+    iptvSyncState.set(accountId, { syncing: false, startedAt: now, error: null });
+    return { ok: true };
+  } catch (e) {
+    iptvSyncState.set(accountId, { syncing: false, startedAt: now, error: "sync_failed" });
+    return { ok: false, error: "sync_failed" };
+  }
+}
+
+function dbGetLiveCategories(accountId) {
+  return db
+    .prepare(
+      "SELECT category_id, category_name, parent_id FROM iptv_live_categories WHERE account_id = ? AND disabled = 0 ORDER BY category_name COLLATE NOCASE",
+    )
+    .all(accountId);
+}
+
+function dbGetVodCategories(accountId) {
+  return db
+    .prepare(
+      "SELECT category_id, category_name, parent_id FROM iptv_vod_categories WHERE account_id = ? AND disabled = 0 ORDER BY category_name COLLATE NOCASE",
+    )
+    .all(accountId);
+}
+
+function dbGetLiveStreams(accountId, params) {
+  const q = String(params?.q ?? "").trim();
+  const categoryId = params?.categoryId ? String(params.categoryId) : "";
+  const onlyFav = params?.onlyFavorites ? 1 : 0;
+  const where = ["s.account_id = @account_id", "s.disabled = 0"];
+  if (categoryId) where.push("s.category_id = @category_id");
+  if (q) where.push("s.name LIKE @q");
+  if (onlyFav) where.push("f.item_id IS NOT NULL");
+  return db
+    .prepare(
+      `
+        SELECT
+          s.stream_id,
+          s.name,
+          s.category_id,
+          s.stream_icon,
+          s.epg_channel_id,
+          CASE WHEN f.item_id IS NULL THEN 0 ELSE 1 END AS favorite
+        FROM iptv_live_streams s
+        LEFT JOIN iptv_favorites f
+          ON f.account_id = s.account_id AND f.type = 'live' AND f.item_id = CAST(s.stream_id AS TEXT)
+        WHERE ${where.join(" AND ")}
+        ORDER BY s.name COLLATE NOCASE
+      `,
+    )
+    .all({ account_id: accountId, category_id: categoryId || null, q: `%${q}%` });
+}
+
+function dbGetVodStreams(accountId, params) {
+  const q = String(params?.q ?? "").trim();
+  const categoryId = params?.categoryId ? String(params.categoryId) : "";
+  const onlyFav = params?.onlyFavorites ? 1 : 0;
+  const where = ["s.account_id = @account_id", "s.disabled = 0"];
+  if (categoryId) where.push("s.category_id = @category_id");
+  if (q) where.push("s.name LIKE @q");
+  if (onlyFav) where.push("f.item_id IS NOT NULL");
+  return db
+    .prepare(
+      `
+        SELECT
+          s.stream_id,
+          s.name,
+          s.category_id,
+          s.stream_icon,
+          s.rating,
+          s.container_extension,
+          CASE WHEN f.item_id IS NULL THEN 0 ELSE 1 END AS favorite
+        FROM iptv_vod_streams s
+        LEFT JOIN iptv_favorites f
+          ON f.account_id = s.account_id AND f.type = 'vod' AND f.item_id = CAST(s.stream_id AS TEXT)
+        WHERE ${where.join(" AND ")}
+        ORDER BY s.name COLLATE NOCASE
+      `,
+    )
+    .all({ account_id: accountId, category_id: categoryId || null, q: `%${q}%` });
+}
+
+function dbSetIptvFavorite(accountId, type, itemId, value) {
+  const now = Date.now();
+  const t = String(type ?? "");
+  const id = String(itemId ?? "");
+  if (!t || !id) return;
+  if (value) {
+    db.prepare(
+      "INSERT OR IGNORE INTO iptv_favorites (account_id, type, item_id, created_at) VALUES (?, ?, ?, ?)",
+    ).run(accountId, t, id, now);
+  } else {
+    db.prepare("DELETE FROM iptv_favorites WHERE account_id = ? AND type = ? AND item_id = ?").run(
+      accountId,
+      t,
+      id,
+    );
+  }
+}
+
+function dbTouchIptvRecent(accountId, type, itemId) {
+  const now = Date.now();
+  const t = String(type ?? "");
+  const id = String(itemId ?? "");
+  if (!t || !id) return;
+  db.prepare(
+    "INSERT INTO iptv_recent (account_id, type, item_id, last_played_at) VALUES (?, ?, ?, ?) ON CONFLICT(account_id, type, item_id) DO UPDATE SET last_played_at = excluded.last_played_at",
+  ).run(accountId, t, id, now);
+}
+
+function iptvRelayAuthorized(req, url) {
+  if (!API_SECRET) return true;
+  const auth = req.headers["authorization"] ?? "";
+  const tokenHeader = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const tokenQuery = url.searchParams.get("token") ?? "";
+  return tokenHeader === API_SECRET || tokenQuery === API_SECRET;
+}
+
+async function relayToClient(req, res, upstreamUrl, opts) {
+  const controller = new AbortController();
+  req.on("close", () => controller.abort());
+  req.on("abort", () => controller.abort());
+  req.on("aborted", () => controller.abort());
+
+  let upstream;
+  try {
+    upstream = await fetch(upstreamUrl, { signal: controller.signal });
+  } catch {
+    res.writeHead(502);
+    res.end("Upstream error");
+    return;
+  }
+
+  if (!upstream.ok || !upstream.body) {
+    res.writeHead(502);
+    res.end("Upstream error");
+    return;
+  }
+
+  res.statusCode = 200;
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Content-Type", "video/mp2t");
+
+  const src = Readable.fromWeb(upstream.body);
+
+  if (opts?.remux && FFMPEG_AVAILABLE) {
+    const proc = spawn(
+      "ffmpeg",
+      [
+        "-i",
+        "pipe:0",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-sn",
+        "-dn",
+        "-c",
+        "copy",
+        "-f",
+        "mpegts",
+        "pipe:1",
+      ],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    proc.stdin.on("error", () => {});
+
+    req.on("close", () => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {}
+    });
+
+    src.on("error", () => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {}
+      try {
+        if (!res.writableEnded) res.end();
+      } catch {}
+    });
+
+    proc.on("error", () => {
+      try {
+        if (!res.writableEnded) res.end();
+      } catch {}
+    });
+
+    src.pipe(proc.stdin);
+    proc.stdout.pipe(res);
+    return;
+  }
+
+  src.pipe(res);
 }
 
 let FFMPEG_AVAILABLE = false;
@@ -929,6 +1513,58 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (/^\/iptv\/active\/relay\/live\/\d+\.ts$/i.test(pathname)) {
+      if (!iptvRelayAuthorized(req, url)) {
+        res.writeHead(401);
+        res.end("Unauthorized");
+        return;
+      }
+
+      const active = dbGetActiveIptvAccount();
+      if (!active) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+
+      const account = iptvGetSecrets(active);
+      const streamId = pathname.split("/").pop().replace(/\.ts$/i, "");
+      const upstreamUrl = `${account.baseUrl}/live/${encodeURIComponent(account.username)}/${encodeURIComponent(account.password)}/${encodeURIComponent(streamId)}.ts`;
+      await relayToClient(req, res, upstreamUrl, { remux: false });
+      dbTouchIptvRecent(active.id, "live", streamId);
+      return;
+    }
+
+    if (/^\/iptv\/active\/relay\/vod\/\d+\.ts$/i.test(pathname)) {
+      if (!iptvRelayAuthorized(req, url)) {
+        res.writeHead(401);
+        res.end("Unauthorized");
+        return;
+      }
+
+      const active = dbGetActiveIptvAccount();
+      if (!active) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+
+      const account = iptvGetSecrets(active);
+      const streamId = pathname.split("/").pop().replace(/\.ts$/i, "");
+      const vod = db
+        .prepare(
+          "SELECT container_extension FROM iptv_vod_streams WHERE account_id = ? AND stream_id = ?",
+        )
+        .get(active.id, Number(streamId));
+      const ext = String(vod?.container_extension ?? "mkv")
+        .replace(/[^a-z0-9]/gi, "")
+        .toLowerCase();
+      const upstreamUrl = `${account.baseUrl}/movie/${encodeURIComponent(account.username)}/${encodeURIComponent(account.password)}/${encodeURIComponent(streamId)}.${ext || "mkv"}`;
+      await relayToClient(req, res, upstreamUrl, { remux: ext !== "ts" });
+      dbTouchIptvRecent(active.id, "vod", streamId);
+      return;
+    }
+
     if (pathname === "/playlist.m3u") {
       const params = url.searchParams;
       if (!xtreamAuth(params)) {
@@ -976,6 +1612,97 @@ const server = http.createServer(async (req, res) => {
         if (API_SECRET && token !== API_SECRET) {
           return json(res, { error: "unauthorized" }, 401);
         }
+      }
+
+      if (pathname.startsWith("/api/iptv/") && API_SECRET) {
+        const auth = req.headers["authorization"] ?? "";
+        const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+        if (token !== API_SECRET) {
+          return json(res, { error: "unauthorized" }, 401);
+        }
+      }
+
+      if (method === "GET" && pathname === "/api/iptv/accounts") {
+        return json(res, dbGetIptvAccounts().map(iptvAccountToClient));
+      }
+
+      if (method === "POST" && pathname === "/api/iptv/accounts") {
+        const body = await readBody(req);
+        const row = dbCreateIptvAccount(body);
+        if (!row) return json(res, { error: "missing_fields" }, 400);
+        const active = dbGetActiveIptvAccount();
+        if (!active) {
+          dbActivateIptvAccount(row.id);
+          void syncIptvAccount(row.id);
+        }
+        return json(res, iptvAccountToClient(row), 201);
+      }
+
+      if (method === "POST" && /^\/api\/iptv\/accounts\/\d+\/activate$/.test(pathname)) {
+        const id = Number(pathname.split("/")[4]);
+        const account = dbGetIptvAccountById(id);
+        if (!account) return json(res, { error: "not_found" }, 404);
+        dbActivateIptvAccount(id);
+        void syncIptvAccount(id);
+        return json(res, { ok: true, syncing: true });
+      }
+
+      if (method === "GET" && pathname === "/api/iptv/active/status") {
+        const active = dbGetActiveIptvAccount();
+        if (!active) return json(res, { active: null, syncing: false });
+        const state = iptvSyncState.get(active.id);
+        return json(res, {
+          active: iptvAccountToClient(active),
+          syncing: state?.syncing ?? false,
+          lastSyncAt: active.last_sync_at ?? 0,
+          error: state?.error ?? null,
+        });
+      }
+
+      if (method === "GET" && pathname === "/api/iptv/active/live/categories") {
+        const active = dbGetActiveIptvAccount();
+        if (!active) return json(res, []);
+        return json(res, dbGetLiveCategories(active.id));
+      }
+
+      if (method === "GET" && pathname === "/api/iptv/active/live/streams") {
+        const active = dbGetActiveIptvAccount();
+        if (!active) return json(res, []);
+        const categoryId = url.searchParams.get("category_id") ?? "";
+        const q = url.searchParams.get("q") ?? "";
+        const onlyFavorites = url.searchParams.get("onlyFavorites") === "1";
+        return json(res, dbGetLiveStreams(active.id, { categoryId, q, onlyFavorites }));
+      }
+
+      if (method === "GET" && pathname === "/api/iptv/active/vod/categories") {
+        const active = dbGetActiveIptvAccount();
+        if (!active) return json(res, []);
+        return json(res, dbGetVodCategories(active.id));
+      }
+
+      if (method === "GET" && pathname === "/api/iptv/active/vod/streams") {
+        const active = dbGetActiveIptvAccount();
+        if (!active) return json(res, []);
+        const categoryId = url.searchParams.get("category_id") ?? "";
+        const q = url.searchParams.get("q") ?? "";
+        const onlyFavorites = url.searchParams.get("onlyFavorites") === "1";
+        return json(res, dbGetVodStreams(active.id, { categoryId, q, onlyFavorites }));
+      }
+
+      if (method === "PATCH" && pathname === "/api/iptv/active/favorite") {
+        const active = dbGetActiveIptvAccount();
+        if (!active) return json(res, { error: "no_active_account" }, 400);
+        const body = await readBody(req);
+        dbSetIptvFavorite(active.id, body.type, body.itemId ?? body.item_id, !!body.value);
+        return json(res, { ok: true });
+      }
+
+      if (method === "POST" && pathname === "/api/iptv/active/recent") {
+        const active = dbGetActiveIptvAccount();
+        if (!active) return json(res, { error: "no_active_account" }, 400);
+        const body = await readBody(req);
+        dbTouchIptvRecent(active.id, body.type, body.itemId ?? body.item_id);
+        return json(res, { ok: true });
       }
 
       if (method === "GET" && pathname === "/api/movies") {
