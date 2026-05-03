@@ -1,17 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Film, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { AppBottomNav } from "@/components/AppBottomNav";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
 import { HomeCarouselRow } from "@/components/HomeCarouselRow";
 import { MovieDetailsModal } from "@/components/MovieDetailsModal";
-import { Player } from "@/components/Player";
 import { SeriesCard } from "@/components/SeriesCard";
 import { HeroCarousel, type HeroSlide } from "@/components/iptv/HeroCarousel";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { MovieTile } from "@/components/MovieTile";
+import { usePremiumPlayer } from "@/components/PremiumPlayerProvider";
 import { getSeriesAll, type Series } from "@/lib/series";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 import { migrateLocalStorageToServer } from "@/lib/api";
@@ -40,12 +40,12 @@ function HomePage() {
   const [series, setSeries] = useState<Series[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [playing, setPlaying] = useState<LibraryItem | null>(null);
   const [details, setDetails] = useState<LibraryItem | null>(null);
   const [showMigrationBanner, setShowMigrationBanner] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [migrationDone, setMigrationDone] = useState(false);
   const [viewAll, setViewAll] = useState<{ title: string; items: LibraryItem[] } | null>(null);
+  const { openPlayer } = usePremiumPlayer();
 
   useEffect(() => {
     Promise.all([getAll(), getSeriesAll()]).then(([items, series]) => {
@@ -106,18 +106,14 @@ function HomePage() {
     return rows;
   }, [items]);
 
-  const handlePlay = (item: LibraryItem) => setPlaying(item);
-  const handleOpen = (item: LibraryItem) => setDetails(item);
+  const handlePlay = useCallback((item: LibraryItem) => openPlayer(item), [openPlayer]);
+  const handleOpen = useCallback((item: LibraryItem) => setDetails(item), []);
   const handleToggleFav = async (item: LibraryItem) => {
     setItems(await update(item.id, { favorite: !item.favorite }));
   };
   const handleDelete = async (item: LibraryItem) => {
     if (details?.id === item.id) setDetails(null);
     setItems(await remove(item.id));
-  };
-  const handleProgress = async (id: string, patch: Partial<LibraryItem>) => {
-    const updated = await update(id, patch);
-    setItems(updated);
   };
 
   const heroSlides = useMemo(() => {
@@ -137,7 +133,7 @@ function HomePage() {
       });
     }
     return slides;
-  }, [recentlyAdded]);
+  }, [handleOpen, handlePlay, recentlyAdded]);
 
   const handleMigrate = async () => {
     setMigrating(true);
@@ -308,14 +304,11 @@ function HomePage() {
         onClose={() => setDetails(null)}
         onPlay={(item) => {
           setDetails(null);
-          setPlaying(item);
+          openPlayer(item);
         }}
         onToggleFav={handleToggleFav}
         onDelete={handleDelete}
       />
-      {playing && (
-        <Player item={playing} onClose={() => setPlaying(null)} onProgress={handleProgress} />
-      )}
 
       <Drawer open={!!viewAll} onOpenChange={(o) => !o && setViewAll(null)}>
         <DrawerContent className="rounded-t-3xl border-border/40 bg-background/95 backdrop-blur-xl">

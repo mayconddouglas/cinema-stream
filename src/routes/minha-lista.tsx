@@ -4,9 +4,9 @@ import { Film, Plus } from "lucide-react";
 import { AppBottomNav } from "@/components/AppBottomNav";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
 import { MovieDetailsModal } from "@/components/MovieDetailsModal";
-import { Player } from "@/components/Player";
 import { MovieTile } from "@/components/MovieTile";
 import { Button } from "@/components/ui/button";
+import { usePremiumPlayer } from "@/components/PremiumPlayerProvider";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 
 export const Route = createFileRoute("/minha-lista")({
@@ -20,8 +20,8 @@ function FavoritesPage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [playing, setPlaying] = useState<LibraryItem | null>(null);
   const [details, setDetails] = useState<LibraryItem | null>(null);
+  const { openPlayer } = usePremiumPlayer();
 
   useEffect(() => {
     getAll().then((items) => {
@@ -37,11 +37,6 @@ function FavoritesPage() {
 
   const handleToggleFav = async (item: LibraryItem) => {
     setItems(await update(item.id, { favorite: !item.favorite }));
-  };
-
-  const handleProgress = async (id: string, patch: Partial<LibraryItem>) => {
-    const updated = await update(id, patch);
-    setItems(updated);
   };
 
   return (
@@ -89,7 +84,7 @@ function FavoritesPage() {
                 key={item.id}
                 item={item}
                 onOpen={setDetails}
-                onPlay={setPlaying}
+                onPlay={openPlayer}
                 onToggleFav={handleToggleFav}
               />
             ))}
@@ -114,7 +109,7 @@ function FavoritesPage() {
         onClose={() => setDetails(null)}
         onPlay={(item) => {
           setDetails(null);
-          setPlaying(item);
+          openPlayer(item);
         }}
         onToggleFav={handleToggleFav}
         onDelete={async (item) => {
@@ -124,9 +119,6 @@ function FavoritesPage() {
           setDetails(null);
         }}
       />
-      {playing ? (
-        <Player item={playing} onClose={() => setPlaying(null)} onProgress={handleProgress} />
-      ) : null}
     </div>
   );
 }

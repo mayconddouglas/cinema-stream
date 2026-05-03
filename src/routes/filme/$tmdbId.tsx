@@ -3,8 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ExternalLink, Play } from "lucide-react";
 import { Header } from "@/components/Header";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
-import { Player } from "@/components/Player";
-import { getAll, update, type LibraryItem } from "@/lib/storage";
+import { usePremiumPlayer } from "@/components/PremiumPlayerProvider";
+import { getAll, type LibraryItem } from "@/lib/storage";
 import { tmdbMovie, type TmdbSearchItem } from "@/lib/tmdb";
 
 type Tab = "about" | "cast" | "similar";
@@ -24,7 +24,7 @@ function MovieDetailsPage() {
   const [tab, setTab] = useState<Tab>("about");
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [playing, setPlaying] = useState<LibraryItem | null>(null);
+  const { openPlayer } = usePremiumPlayer();
 
   useEffect(() => {
     getAll().then(setItems);
@@ -47,11 +47,6 @@ function MovieDetailsPage() {
       "_blank",
       "noopener,noreferrer",
     );
-  };
-
-  const handleProgress = async (id: string, patch: Partial<LibraryItem>) => {
-    const updated = await update(id, patch);
-    setItems(updated);
   };
 
   const goBack = () => {
@@ -113,7 +108,7 @@ function MovieDetailsPage() {
 
               <div className="flex flex-wrap gap-2">
                 <button
-                  onClick={() => inLibrary && setPlaying(inLibrary)}
+                  onClick={() => inLibrary && openPlayer(inLibrary)}
                   disabled={!inLibrary}
                   className="inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-glow hover:brightness-110 transition disabled:opacity-50"
                 >
@@ -271,9 +266,6 @@ function MovieDetailsPage() {
       </main>
 
       <AddMagnetDialog open={showAdd} onClose={() => setShowAdd(false)} onAdded={setItems} />
-      {playing && (
-        <Player item={playing} onClose={() => setPlaying(null)} onProgress={handleProgress} />
-      )}
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Loader2, Play, Plus, Pencil } from "lucide-react";
 import { Header } from "@/components/Header";
-import { Player } from "@/components/Player";
+import { usePremiumPlayer } from "@/components/PremiumPlayerProvider";
 import { tmdbTv, tmdbTvSeason, type TmdbTvEpisode } from "@/lib/tmdb";
 import { fetchMetaWithRetry } from "@/lib/torrent";
 import {
@@ -57,6 +57,7 @@ function pad2(n: number) {
 function SeriesDetailsPage() {
   const show = Route.useLoaderData();
   const navigate = useNavigate();
+  const { openPlayer } = usePremiumPlayer();
   const [season, setSeason] = useState<number>(() => {
     const s = show.seasons.find((x) => x.seasonNumber > 0)?.seasonNumber ?? 1;
     return s;
@@ -81,19 +82,18 @@ function SeriesDetailsPage() {
   const [addingMagnetFor, setAddingMagnetFor] = useState<string | null>(null);
   const [episodeMagnet, setEpisodeMagnet] = useState("");
   const [episodeImporting, setEpisodeImporting] = useState(false);
-  const [playing, setPlaying] = useState<{
-    id: string;
-    title: string;
-    magnet: string;
-    description?: string;
-    poster?: string;
-    year?: string;
-    fileIndex?: number | null;
-  } | null>(null);
 
   useEffect(() => {
     getEpisodesForShow(show.id).then(setLocalEpisodes);
-  }, [show.id]);
+  }, [
+    show.backdrop,
+    show.id,
+    show.originalTitle,
+    show.overview,
+    show.poster,
+    show.title,
+    show.year,
+  ]);
 
   useEffect(() => {
     const run = async () => {
@@ -111,7 +111,15 @@ function SeriesDetailsPage() {
       });
     };
     void run();
-  }, [show.id]);
+  }, [
+    show.backdrop,
+    show.id,
+    show.originalTitle,
+    show.overview,
+    show.poster,
+    show.title,
+    show.year,
+  ]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -942,17 +950,27 @@ function SeriesDetailsPage() {
                             <button
                               onClick={() => {
                                 if (!canPlay || !local) return;
-                                setPlaying({
-                                  id: local.id,
-                                  title: `${show.title} — S${pad2(local.season)}E${pad2(
-                                    local.episode,
-                                  )}`,
-                                  magnet: local.magnet!,
-                                  description: ep.overview ?? undefined,
-                                  poster: ep.still ?? undefined,
-                                  year: show.year ?? undefined,
-                                  fileIndex: local.fileIndex ?? null,
-                                });
+                                openPlayer(
+                                  {
+                                    id: local.id,
+                                    title: `${show.title} — S${pad2(local.season)}E${pad2(local.episode)}`,
+                                    magnet: local.magnet!,
+                                    description: ep.overview ?? undefined,
+                                    poster: ep.still ?? undefined,
+                                    backdrop: show.backdrop ?? undefined,
+                                    year: show.year ?? undefined,
+                                    addedAt: Date.now(),
+                                  },
+                                  {
+                                    fileIndex:
+                                      typeof local.fileIndex === "number"
+                                        ? local.fileIndex
+                                        : undefined,
+                                    onProgress: async (episodeId, patch) => {
+                                      await handleProgress(episodeId, patch as Partial<Episode>);
+                                    },
+                                  },
+                                );
                               }}
                               disabled={!canPlay}
                               className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 transition disabled:opacity-40 min-h-[40px]"
@@ -1103,23 +1121,6 @@ function SeriesDetailsPage() {
           )}
         </section>
       </main>
-
-      {playing && (
-        <Player
-          item={{
-            id: playing.id,
-            title: playing.title,
-            magnet: playing.magnet,
-            poster: playing.poster,
-            year: playing.year,
-            description: playing.description,
-            addedAt: Date.now(),
-          }}
-          fileIndex={typeof playing.fileIndex === "number" ? playing.fileIndex : undefined}
-          onClose={() => setPlaying(null)}
-          onProgress={(id, patch) => handleProgress(id, patch)}
-        />
-      )}
     </div>
   );
 }
