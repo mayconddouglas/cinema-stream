@@ -81,30 +81,51 @@ export function parseEpisodeFromName(name: string) {
   return null;
 }
 
-export async function upsertSeries(series: Series) {
-  return apiUpsertSeries(series);
-}
-
-export async function getSeriesAll() {
+export async function getSeriesAll(): Promise<Series[]> {
   try {
-    return await apiGetAllSeries();
+    return (await apiGetAllSeries()) as Series[];
   } catch {
     return [];
   }
 }
 
-export async function upsertEpisodesBulk(showTmdbId: number, episodes: Episode[]) {
-  return apiUpsertEpisodesBulk(showTmdbId, episodes);
+export async function upsertSeries(series: Series): Promise<void> {
+  await apiUpsertSeries(series);
 }
 
-export async function patchEpisode(id: string, patch: Partial<Episode>) {
-  return apiPatchEpisode(id, patch as Record<string, unknown>);
+export async function getEpisodesAll(): Promise<Episode[]> {
+  return [];
 }
 
-export async function getEpisodesForShow(showTmdbId: number) {
+export async function getEpisodesForShow(showTmdbId: number): Promise<Episode[]> {
   try {
-    return await apiGetEpisodes(showTmdbId);
+    return (await apiGetEpisodes(showTmdbId)) as Episode[];
   } catch {
     return [];
+  }
+}
+
+export async function upsertEpisodesBulk(
+  showTmdbId: number,
+  episodes: Episode[],
+): Promise<Episode[]> {
+  try {
+    return (await apiUpsertEpisodesBulk(showTmdbId, episodes)) as Episode[];
+  } catch {
+    return episodes;
+  }
+}
+
+export async function patchEpisode(id: string, patch: Partial<Episode>): Promise<Episode | null> {
+  try {
+    const apiPatch: Record<string, unknown> = {};
+    if (patch.progress !== undefined) apiPatch.progress = patch.progress;
+    if (patch.duration !== undefined) apiPatch.duration = patch.duration;
+    if (patch.lastPlayedAt !== undefined) apiPatch.lastPlayedAt = patch.lastPlayedAt;
+    if (patch.magnet !== undefined) apiPatch.magnet = patch.magnet;
+    if (patch.fileIndex !== undefined) apiPatch.fileIndex = patch.fileIndex;
+    return (await apiPatchEpisode(id, apiPatch)) as Episode;
+  } catch {
+    return null;
   }
 }

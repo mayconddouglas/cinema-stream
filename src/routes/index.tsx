@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Film, Copy, Check } from "lucide-react";
+import { Film } from "lucide-react";
 import { Header } from "@/components/Header";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
 import { MovieCard } from "@/components/MovieCard";
@@ -30,24 +30,6 @@ export const Route = createFileRoute("/")({
   component: HomePage,
 });
 
-function getProxyBase(): string {
-  const env = (import.meta as unknown as { env?: { VITE_TORRENT_PROXY_URL?: string } }).env;
-  const raw = env?.VITE_TORRENT_PROXY_URL;
-  return typeof raw === "string" ? raw.trim().replace(/\/+$/, "") : "";
-}
-
-function getXtreamUser(): string {
-  const env = (import.meta as unknown as { env?: { VITE_XTREAM_USER?: string } }).env;
-  const raw = env?.VITE_XTREAM_USER;
-  return typeof raw === "string" ? raw.trim() : "";
-}
-
-function getXtreamPass(): string {
-  const env = (import.meta as unknown as { env?: { VITE_XTREAM_PASS?: string } }).env;
-  const raw = env?.VITE_XTREAM_PASS;
-  return typeof raw === "string" ? raw.trim() : "";
-}
-
 function HomePage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [series, setSeries] = useState<Series[]>([]);
@@ -55,8 +37,6 @@ function HomePage() {
   const [showAdd, setShowAdd] = useState(false);
   const [playing, setPlaying] = useState<LibraryItem | null>(null);
   const [details, setDetails] = useState<LibraryItem | null>(null);
-  const [showIptv, setShowIptv] = useState(false);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([getAll(), getSeriesAll()]).then(([items, series]) => {
@@ -121,25 +101,6 @@ function HomePage() {
   const handleProgress = async (id: string, patch: Partial<LibraryItem>) => {
     const updated = await update(id, patch);
     setItems(updated);
-  };
-
-  const proxyBase = getProxyBase();
-  const xtUser = getXtreamUser();
-  const xtPass = getXtreamPass();
-  const m3uUrl =
-    proxyBase && xtUser && xtPass
-      ? `${proxyBase}/playlist.m3u?username=${encodeURIComponent(xtUser)}&password=${encodeURIComponent(xtPass)}`
-      : "";
-
-  const copyValue = async (key: string, value: string) => {
-    if (!value) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 1500);
-    } catch {
-      void 0;
-    }
   };
 
   return (
@@ -257,14 +218,6 @@ function HomePage() {
             Buffet de Vídeo é um player WebTorrent. Adicione apenas conteúdo do qual você tem
             direito de acesso.
           </p>
-          <button
-            type="button"
-            onClick={() => setShowIptv(true)}
-            className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/40 transition"
-          >
-            <Film className="h-3.5 w-3.5" />
-            Conectar IPTV
-          </button>
         </footer>
       </main>
 
@@ -282,82 +235,6 @@ function HomePage() {
       />
       {playing && (
         <Player item={playing} onClose={() => setPlaying(null)} onProgress={handleProgress} />
-      )}
-
-      {showIptv && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6"
-          onClick={() => setShowIptv(false)}
-        >
-          <div
-            className="w-full max-w-lg rounded-xl bg-card border border-border shadow-card p-6 space-y-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="space-y-1">
-              <h2 className="font-display text-2xl text-cream">Conectar IPTV</h2>
-              <p className="text-sm text-muted-foreground">
-                Use as credenciais abaixo em apps compatíveis com Xtream Codes ou M3U.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              {[
-                { key: "host", label: "Host", value: proxyBase },
-                { key: "user", label: "Usuário", value: xtUser },
-                { key: "pass", label: "Senha", value: xtPass },
-                { key: "m3u", label: "M3U", value: m3uUrl },
-              ].map((row) => (
-                <div
-                  key={row.key}
-                  className="rounded-lg border border-border/40 bg-background/40 p-3"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs text-muted-foreground">{row.label}</p>
-                      <p className="text-sm text-foreground font-mono break-all">
-                        {row.value || "-"}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void copyValue(row.key, row.value)}
-                      disabled={!row.value}
-                      className="rounded-md bg-secondary px-3 py-2 text-xs hover:bg-secondary/80 transition disabled:opacity-50 inline-flex items-center gap-2 shrink-0"
-                    >
-                      {copiedKey === row.key ? (
-                        <>
-                          <Check className="h-3.5 w-3.5" />
-                          Copiado
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3.5 w-3.5" />
-                          Copiar
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="rounded-lg border border-border/40 bg-secondary/20 p-3">
-              <p className="text-xs text-muted-foreground">
-                Apps compatíveis: XCIPTV, TiviMate, GSE IPTV, Smarters Player, VLC (M3U).
-              </p>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => setShowIptv(false)}
-                className="rounded-md px-4 py-2 text-sm hover:bg-secondary transition"
-              >
-                Fechar
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );
