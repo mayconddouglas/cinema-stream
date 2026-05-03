@@ -7,7 +7,7 @@ export function TmdbShowCard({ item }: { item: TmdbSearchItem }) {
     <Link
       to="/serie/$tmdbId"
       params={{ tmdbId: String(item.id) }}
-      className="card-hover group relative aspect-[2/3] rounded-2xl overflow-hidden bg-white/5 border border-border/40"
+      className="card-hover group relative block aspect-[2/3] rounded-2xl overflow-hidden bg-white/5 border border-border/40"
     >
       {item.poster ? (
         <img
