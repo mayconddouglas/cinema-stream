@@ -745,9 +745,9 @@ const server = http.createServer(async (req, res) => {
             rating_5based: "4",
             added: String(Math.floor((m.added_at ?? Date.now()) / 1000)),
             category_id: "1",
-            container_extension: "mkv",
+            container_extension: "ts",
             custom_sid: "",
-            direct_source: `${host}/xtream/movie/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(m.id)}.mkv`,
+            direct_source: `${host}/xtream/movie/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(m.id)}.ts`,
           })),
         );
       }
@@ -794,7 +794,7 @@ const server = http.createServer(async (req, res) => {
             id: ep.id,
             episode_num: ep.episode,
             title: ep.name,
-            container_extension: "mkv",
+            container_extension: "ts",
             info: {
               movie_image: ep.still ?? "",
               plot: ep.overview ?? "",
@@ -806,7 +806,7 @@ const server = http.createServer(async (req, res) => {
             },
             added: String(Math.floor((ep.added_at ?? Date.now()) / 1000)),
             season: ep.season,
-            direct_source: `${host}/xtream/series/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(ep.id)}.mkv`,
+            direct_source: `${host}/xtream/series/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(ep.id)}.ts`,
             custom_sid: "",
           });
         }
@@ -873,6 +873,8 @@ const server = http.createServer(async (req, res) => {
       const parts = pathname.split("/");
       const user = parts[3];
       const pass = parts[4];
+      const extMatch = /\.(mkv|mp4|avi|ts)$/i.exec(parts[5]);
+      const ext = extMatch ? extMatch[1].toLowerCase() : "mkv";
       const movieIdRaw = parts[5].replace(/\.(mkv|mp4|avi|ts)$/i, "");
       const movieId = decodeURIComponent(movieIdRaw);
 
@@ -889,7 +891,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const streamUrl = `/stream?magnet=${encodeURIComponent(movie.magnet)}&index=${movie.file_index ?? 0}`;
+      const format = ext === "ts" ? "ts" : "";
+      const streamUrl = `/stream?magnet=${encodeURIComponent(movie.magnet)}&index=${movie.file_index ?? 0}${format ? `&format=${format}` : ""}`;
       const host = XTREAM_HOST || `http://${req.headers.host}`;
       res.writeHead(307, { Location: `${host}${streamUrl}` });
       res.end();
@@ -900,6 +903,8 @@ const server = http.createServer(async (req, res) => {
       const parts = pathname.split("/");
       const user = parts[3];
       const pass = parts[4];
+      const extMatch = /\.(mkv|mp4|avi|ts)$/i.exec(parts[5]);
+      const ext = extMatch ? extMatch[1].toLowerCase() : "mkv";
       const epIdRaw = parts[5].replace(/\.(mkv|mp4|avi|ts)$/i, "");
       const epId = decodeURIComponent(epIdRaw);
 
@@ -916,7 +921,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const streamUrl = `/stream?magnet=${encodeURIComponent(ep.magnet)}&index=${ep.file_index ?? 0}`;
+      const format = ext === "ts" ? "ts" : "";
+      const streamUrl = `/stream?magnet=${encodeURIComponent(ep.magnet)}&index=${ep.file_index ?? 0}${format ? `&format=${format}` : ""}`;
       const host = XTREAM_HOST || `http://${req.headers.host}`;
       res.writeHead(307, { Location: `${host}${streamUrl}` });
       res.end();
@@ -942,13 +948,13 @@ const server = http.createServer(async (req, res) => {
       let m3u = "#EXTM3U\n";
 
       for (const m of movies) {
-        const streamUrl = `${host}/xtream/movie/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(m.id)}.mkv`;
+        const streamUrl = `${host}/xtream/movie/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(m.id)}.ts`;
         m3u += `#EXTINF:-1 tvg-logo="${m.poster ?? ""}" group-title="Filmes",${m.title}${m.year ? ` (${m.year})` : ""}\n`;
         m3u += `${streamUrl}\n`;
       }
 
       for (const ep of episodes) {
-        const streamUrl = `${host}/xtream/series/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(ep.id)}.mkv`;
+        const streamUrl = `${host}/xtream/series/${XTREAM_USER}/${XTREAM_PASS}/${encodeURIComponent(ep.id)}.ts`;
         const label = `${ep.show_title} S${String(ep.season).padStart(2, "0")}E${String(ep.episode).padStart(2, "0")} - ${ep.name}`;
         m3u += `#EXTINF:-1 tvg-logo="${ep.still ?? ""}" group-title="${ep.show_title}",${label}\n`;
         m3u += `${streamUrl}\n`;
@@ -1901,6 +1907,69 @@ const server = http.createServer(async (req, res) => {
       const fileSize = Number(file.length) || 0;
       if (!fileSize) {
         sendJson(res, 500, { error: "unknown_length" });
+        return;
+      }
+
+      const streamFormat = (url.searchParams.get("format") || "").toLowerCase();
+      if (streamFormat === "ts" && FFMPEG_AVAILABLE) {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "video/mp2t");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader(
+          "Access-Control-Expose-Headers",
+          "Content-Length, Content-Range, Accept-Ranges",
+        );
+
+        const fileStream = file.createReadStream();
+        const proc = spawn(
+          "ffmpeg",
+          [
+            "-i",
+            "pipe:0",
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
+            "-sn",
+            "-dn",
+            "-c",
+            "copy",
+            "-f",
+            "mpegts",
+            "pipe:1",
+          ],
+          { stdio: ["pipe", "pipe", "pipe"] },
+        );
+
+        proc.stdin.on("error", () => {});
+
+        req.on("close", () => {
+          try {
+            proc.kill("SIGKILL");
+          } catch {}
+          try {
+            fileStream.destroy();
+          } catch {}
+        });
+
+        proc.on("error", () => {
+          try {
+            if (!res.writableEnded) res.end();
+          } catch {}
+        });
+
+        fileStream.on("error", () => {
+          try {
+            proc.kill("SIGKILL");
+          } catch {}
+          try {
+            if (!res.writableEnded) res.end();
+          } catch {}
+        });
+
+        fileStream.pipe(proc.stdin);
+        proc.stdout.pipe(res);
         return;
       }
 
