@@ -34,6 +34,22 @@ const DEFAULT_ANNOUNCE = [
 ];
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 
+function getMimeType(filename) {
+  const ext = String(filename).toLowerCase().split(".").pop();
+  const types = {
+    mp4: "video/mp4",
+    mkv: "video/x-matroska",
+    avi: "video/x-msvideo",
+    mov: "video/quicktime",
+    wmv: "video/x-ms-wmv",
+    webm: "video/webm",
+    mp3: "audio/mpeg",
+    aac: "audio/aac",
+    flac: "audio/flac",
+  };
+  return types[ext] ?? "application/octet-stream";
+}
+
 function getContentType(name) {
   const lower = String(name).toLowerCase();
   if (lower.endsWith(".mp4") || lower.endsWith(".m4v")) return "video/mp4";
@@ -303,13 +319,19 @@ const port = Number(process.env.PORT || 8787);
 
 const server = http.createServer(async (req, res) => {
   try {
-    setCors(res);
     if (req.method === "OPTIONS") {
-      res.statusCode = 204;
+      res.writeHead(204, {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        "Access-Control-Allow-Headers": "Range, Content-Type",
+        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
+        "Access-Control-Max-Age": "86400",
+      });
       res.end();
       return;
     }
 
+    setCors(res);
     const isHead = req.method === "HEAD";
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     if (req.method !== "GET" && req.method !== "HEAD") {
@@ -1127,127 +1149,92 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const indexRaw = url.searchParams.get("index");
-    const index = indexRaw ? Number(indexRaw) : NaN;
-    const indexedFile =
-      Number.isFinite(index) && index >= 0 && index < (torrent.files?.length ?? 0)
-        ? torrent.files[index]
-        : null;
+    if (url.pathname === "/stream") {
+      await waitForReady(torrent, 60_000);
 
-    const file =
-      indexedFile && VIDEO_RE.test(indexedFile.name) ? indexedFile : pickVideoFile(torrent);
-    if (!file) {
-      sendJson(res, 422, { error: "no_video_file" });
-      return;
-    }
+      const indexRaw = url.searchParams.get("index");
+      const fileIndex = indexRaw ? Number(indexRaw) : NaN;
+      const indexedFile =
+        Number.isFinite(fileIndex) && fileIndex >= 0 && fileIndex < (torrent.files?.length ?? 0)
+          ? torrent.files[fileIndex]
+          : null;
 
-    const total = Number(file.length) || 0;
-    if (!total) {
-      sendJson(res, 500, { error: "unknown_length" });
-      return;
-    }
+      const file =
+        indexedFile && VIDEO_RE.test(indexedFile.name) ? indexedFile : pickVideoFile(torrent);
+      if (!file) {
+        sendJson(res, 422, { error: "no_video_file" });
+        return;
+      }
 
-    if (needsTransmux(file.name) && FFMPEG_AVAILABLE) {
-      res.statusCode = 200;
-      res.setHeader("content-type", "video/mp4");
-      res.setHeader("transfer-encoding", "chunked");
-      res.setHeader("cache-control", "no-cache");
-      res.setHeader("x-transmuxed", "true");
+      const fileSize = Number(file.length) || 0;
+      if (!fileSize) {
+        sendJson(res, 500, { error: "unknown_length" });
+        return;
+      }
 
       if (isHead) {
+        res.writeHead(200, {
+          "Content-Type": getMimeType(file.name),
+          "Content-Length": fileSize,
+          "Accept-Ranges": "bytes",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "Content-Length, Accept-Ranges",
+        });
         res.end();
         return;
       }
 
-      const fileStream = file.createReadStream();
-      const proc = spawn(
-        "ffmpeg",
-        [
-          "-i",
-          "pipe:0",
-          "-map",
-          "0:v:0",
-          "-map",
-          "0:a",
-          "-c:v",
-          "copy",
-          "-c:a",
-          "aac",
-          "-b:a",
-          "192k",
-          "-movflags",
-          "frag_keyframe+empty_moov+default_base_moof",
-          "-f",
-          "mp4",
-          "pipe:1",
-        ],
-        { stdio: ["pipe", "pipe", "pipe"] },
-      );
+      const rangeHeader = req.headers["range"];
 
-      proc.stdin.on("error", () => {});
+      if (!rangeHeader) {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", getMimeType(file.name));
+        res.setHeader("Content-Length", fileSize);
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader(
+          "Access-Control-Expose-Headers",
+          "Content-Length, Content-Range, Accept-Ranges",
+        );
+        const fileStream = file.createReadStream();
+        req.on("close", () => fileStream.destroy());
+        req.on("abort", () => fileStream.destroy());
+        req.on("aborted", () => fileStream.destroy());
+        fileStream.pipe(res);
+        return;
+      }
 
-      req.on("close", () => {
-        try {
-          proc.kill("SIGKILL");
-        } catch {}
-        try {
-          fileStream.destroy();
-        } catch {}
+      const [startStr, endStr] = String(rangeHeader).replace("bytes=", "").split("-");
+      const start = parseInt(startStr, 10);
+      const end = endStr ? parseInt(endStr, 10) : fileSize - 1;
+
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start >= fileSize || start > end) {
+        res.writeHead(416, { "Content-Range": `bytes */${fileSize}` });
+        res.end();
+        return;
+      }
+
+      const chunkSize = end - start + 1;
+      res.writeHead(206, {
+        "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": chunkSize,
+        "Content-Type": getMimeType(file.name),
+        "Cache-Control": "no-cache",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
       });
 
-      proc.on("error", (err) => {
-        console.error("[ffmpeg] transmux error:", err);
-        try {
-          if (!res.writableEnded) res.end();
-        } catch {}
-      });
-
-      fileStream.on("error", (err) => {
-        console.error("[torrent] transmux file error:", err);
-        try {
-          proc.kill("SIGKILL");
-        } catch {}
-        try {
-          if (!res.writableEnded) res.end();
-        } catch {}
-      });
-
-      fileStream.pipe(proc.stdin);
-      proc.stdout.pipe(res);
+      const fileStream = file.createReadStream({ start, end });
+      req.on("close", () => fileStream.destroy());
+      req.on("abort", () => fileStream.destroy());
+      req.on("aborted", () => fileStream.destroy());
+      fileStream.pipe(res);
       return;
     }
 
-    const range = parseRange(req.headers.range, total);
-    let start = 0;
-    let end = total - 1;
-
-    res.setHeader("accept-ranges", "bytes");
-    res.setHeader("cache-control", "no-store");
-    res.setHeader("content-type", getContentType(file.name));
-
-    if (range) {
-      start = range.start;
-      end = range.end;
-      res.statusCode = 206;
-      res.setHeader("content-range", `bytes ${start}-${end}/${total}`);
-      res.setHeader("content-length", String(end - start + 1));
-    } else {
-      res.statusCode = 200;
-      res.setHeader("content-length", String(total));
-    }
-
-    if (isHead) {
-      res.end();
-      return;
-    }
-
-    const stream = file.createReadStream({ start, end });
-    stream.on("error", () => {
-      try {
-        res.destroy();
-      } catch {}
-    });
-    stream.pipe(res);
+    sendJson(res, 404, { error: "not_found" });
   } catch (err) {
     try {
       sendJson(res, 500, { error: "internal_error" });

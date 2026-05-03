@@ -5,6 +5,14 @@ import type { MediaPlayerInstance } from "@vidstack/react";
 import { MediaPlayer, MediaProvider } from "@vidstack/react";
 import { DefaultVideoLayout, defaultLayoutIcons } from "@vidstack/react/player/layouts/default";
 import type { LibraryItem } from "@/lib/storage";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Input } from "@/components/ui/input";
 
 type Stats = {
   downloadSpeed: number;
@@ -73,13 +81,14 @@ function generateVlcUrl(streamUrl: string): string {
   return streamUrl.replace(/^https?:\/\//, "vlc://");
 }
 
-function getVlcDeepLink(streamUrl: string): string {
+function getVlcDeepLink(streamUrl: string, startSeconds?: number): string {
+  const timeFragment = startSeconds && startSeconds > 10 ? `#t=${Math.floor(startSeconds)}s` : "";
   const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
   const isAndroid = /android/i.test(ua);
   if (isAndroid) {
-    return `intent:${streamUrl}#Intent;package=org.videolan.vlc;action=android.intent.action.VIEW;type=video/*;end`;
+    return `intent:${streamUrl}${timeFragment}#Intent;package=org.videolan.vlc;action=android.intent.action.VIEW;type=video/*;end`;
   }
-  return generateVlcUrl(streamUrl);
+  return `${generateVlcUrl(streamUrl)}${timeFragment}`;
 }
 
 function getCachedMeta(magnet: string) {
@@ -131,6 +140,14 @@ function formatBytes(bytes: number, perSecond = false) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB${suffix}`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB${suffix}`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB${suffix}`;
+}
+
+function formatTime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m ${s}s`;
 }
 
 const VIDEO_RE = /\.(mp4|webm|mkv|m4v|mov|avi|ogv|ogg)$/i;
@@ -269,6 +286,8 @@ export function Player({
   const [preplayBuffered, setPreplayBuffered] = useState(0);
   const [videoSrc, setVideoSrc] = useState<string>("");
   const [vlcUrl, setVlcUrl] = useState<string>("");
+  const [vlcResumeOpen, setVlcResumeOpen] = useState(false);
+  const [vlcResumeMinutes, setVlcResumeMinutes] = useState("");
   const [isTransmuxed, setIsTransmuxed] = useState(false);
   const [audioTracks, setAudioTracks] = useState<StreamAudioOption[]>([]);
   const [audioChoice, setAudioChoice] = useState("native");
@@ -288,7 +307,7 @@ export function Player({
       return;
     }
     const streamUrl = `${base}/stream?magnet=${encodeURIComponent(item.magnet)}&index=0`;
-    setVlcUrl(getVlcDeepLink(streamUrl));
+    setVlcUrl(getVlcDeepLink(streamUrl, item.progress ?? 0));
   }, [item.magnet]);
 
   useEffect(() => {
@@ -422,7 +441,7 @@ export function Player({
               playIntentRef.current = paused ? "none" : "auto";
             }
             const streamUrl = `${base}/stream?magnet=${encodeURIComponent(item.magnet)}&index=${index}`;
-            setVlcUrl(getVlcDeepLink(streamUrl));
+            setVlcUrl(getVlcDeepLink(streamUrl, item.progress ?? 0));
             setVideoSrc(streamUrl);
           };
           proxySwitchRef.current = switchProxyVideo;
@@ -464,7 +483,7 @@ export function Player({
               if (!meta) return;
               const bestIndex = typeof meta.bestVideoIndex === "number" ? meta.bestVideoIndex : 0;
               const bestStreamUrl = `${base}/stream?magnet=${encodeURIComponent(item.magnet)}&index=${bestIndex}`;
-              if (!destroyed) setVlcUrl(getVlcDeepLink(bestStreamUrl));
+              if (!destroyed) setVlcUrl(getVlcDeepLink(bestStreamUrl, item.progress ?? 0));
               const files = Array.isArray(meta?.files) ? meta.files : [];
               const videos = files
                 .filter((f) => f.kind === "video")
@@ -1450,6 +1469,15 @@ export function Player({
     forceProxyRef.current?.();
   };
 
+  const handleClose = () => {
+    if (sourceMode === "proxy" && vlcUrl) {
+      setVlcResumeMinutes("");
+      setVlcResumeOpen(true);
+      return;
+    }
+    onClose();
+  };
+
   const showOverlay = phase !== "ready" || preplayActive;
 
   return (
@@ -1476,10 +1504,15 @@ export function Player({
                 <path d="M12 2L2 19.5h20L12 2zm0 3.5l7.5 13H4.5L12 5.5z" />
               </svg>
               <span className="hidden sm:inline">Abrir no VLC</span>
+              {item.progress && item.progress > 10 && (
+                <span className="text-[10px] opacity-70 ml-1">
+                  (retomar em {formatTime(item.progress)})
+                </span>
+              )}
             </a>
           )}
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="rounded-full bg-card/80 backdrop-blur p-2.5 hover:bg-destructive hover:text-destructive-foreground transition min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Fechar"
           >
@@ -1548,7 +1581,12 @@ export function Player({
                         >
                           <path d="M12 2L2 19.5h20L12 2zm0 3.5l7.5 13H4.5L12 5.5z" />
                         </svg>
-                        Abrir no VLC
+                        <span>Abrir no VLC</span>
+                        {item.progress && item.progress > 10 && (
+                          <span className="text-[10px] opacity-70 ml-1">
+                            (retomar em {formatTime(item.progress)})
+                          </span>
+                        )}
                       </a>
                     </div>
                   )}
@@ -1631,6 +1669,56 @@ export function Player({
           <span>{warning}</span>
         </div>
       )}
+
+      <Sheet
+        open={vlcResumeOpen}
+        onOpenChange={(open) => {
+          setVlcResumeOpen(open);
+          if (!open) onClose();
+        }}
+      >
+        <SheetContent side="bottom" className="max-w-6xl mx-auto">
+          <SheetHeader>
+            <SheetTitle>Onde você parou no VLC?</SheetTitle>
+            <SheetDescription>(opcional)</SheetDescription>
+          </SheetHeader>
+
+          <div className="mt-4 flex flex-col gap-2">
+            <Input
+              inputMode="numeric"
+              type="number"
+              min={0}
+              placeholder="Minutos (ex: 42)"
+              value={vlcResumeMinutes}
+              onChange={(e) => setVlcResumeMinutes(e.target.value)}
+            />
+            <div className="text-xs text-muted-foreground">
+              Se você informar, salvamos o progresso para retomar depois.
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <button
+              onClick={() => onClose()}
+              className="inline-flex items-center justify-center rounded-md bg-secondary px-4 py-2.5 text-sm font-medium text-foreground hover:bg-secondary/80 transition min-h-[44px]"
+            >
+              Pular
+            </button>
+            <button
+              onClick={() => {
+                const minutes = Number(vlcResumeMinutes);
+                if (Number.isFinite(minutes) && minutes > 0) {
+                  onProgress(item.id, { progress: minutes * 60, lastPlayedAt: Date.now() });
+                }
+                onClose();
+              }}
+              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:brightness-110 transition min-h-[44px]"
+            >
+              Salvar
+            </button>
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
