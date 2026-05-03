@@ -63,6 +63,7 @@ export function AddMagnetDialog({
   const [detectedFiles, setDetectedFiles] = useState<DetectedFile[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<number>>(new Set());
   const [mode, setMode] = useState<"single" | "pack">("single");
+  const [packImporting, setPackImporting] = useState(false);
 
   const parsedMagnet = useMemo(() => parseMagnet(magnet), [magnet]);
 
@@ -277,39 +278,48 @@ export function AddMagnetDialog({
       return;
     }
 
-    let allItems: LibraryItem[] = [];
+    setPackImporting(true);
+    setError(null);
 
-    for (const file of toImport) {
-      const itemId = `${parsed.infoHash}-f${file.index}`;
-      const item: LibraryItem = {
-        id: itemId,
-        title: file.customTitle || file.cleanTitle,
-        magnet: magnet.trim(),
-        fileIndex: file.index,
-        poster: file.poster || undefined,
-        backdrop: file.backdrop || undefined,
-        description: file.description || undefined,
-        year: file.year || undefined,
-        tmdbId: file.tmdbId ?? undefined,
-        addedAt: Date.now(),
-      };
-      allItems = await upsert(item);
+    try {
+      let allItems: LibraryItem[] = [];
+
+      for (const file of toImport) {
+        const itemId = `${parsed.infoHash}-f${file.index}`;
+        const item: LibraryItem = {
+          id: itemId,
+          title: file.customTitle || file.cleanTitle,
+          magnet: magnet.trim(),
+          fileIndex: file.index,
+          poster: file.poster || undefined,
+          backdrop: file.backdrop || undefined,
+          description: file.description || undefined,
+          year: file.year || undefined,
+          tmdbId: file.tmdbId ?? undefined,
+          addedAt: Date.now(),
+        };
+        allItems = await upsert(item);
+      }
+
+      onAdded(allItems);
+      setMagnet("");
+      setTitle("");
+      setPoster("");
+      setBackdrop("");
+      setImdbId("");
+      setDescription("");
+      setYear("");
+      setTmdbResults([]);
+      setTmdbSelectedId(null);
+      setDetectedFiles([]);
+      setSelectedFiles(new Set());
+      setMode("single");
+      onClose();
+    } catch {
+      setError("Falha ao salvar os filmes. Tente novamente.");
+    } finally {
+      setPackImporting(false);
     }
-
-    onAdded(allItems);
-    setMagnet("");
-    setTitle("");
-    setPoster("");
-    setBackdrop("");
-    setImdbId("");
-    setDescription("");
-    setYear("");
-    setTmdbResults([]);
-    setTmdbSelectedId(null);
-    setDetectedFiles([]);
-    setSelectedFiles(new Set());
-    setMode("single");
-    onClose();
   };
 
   const submit = async (e: React.FormEvent) => {
@@ -514,11 +524,15 @@ export function AddMagnetDialog({
 
             <button
               type="button"
-              onClick={submitPack}
-              disabled={selectedFiles.size === 0}
+              onClick={() => void submitPack()}
+              disabled={packImporting || selectedFiles.size === 0}
               className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary py-3 text-sm font-medium text-primary-foreground hover:brightness-110 transition disabled:opacity-50 min-h-[48px]"
             >
-              <Plus className="h-4 w-4" />
+              {packImporting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="h-4 w-4" />
+              )}
               Adicionar{" "}
               {selectedFiles.size > 0
                 ? `${selectedFiles.size} filme${selectedFiles.size > 1 ? "s" : ""}`
