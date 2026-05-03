@@ -9,12 +9,18 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as MinhaListaRouteImport } from './routes/minha-lista'
 import { Route as IptvRouteImport } from './routes/iptv'
 import { Route as BuscarRouteImport } from './routes/buscar'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SerieTmdbIdRouteImport } from './routes/serie/$tmdbId'
 import { Route as FilmeTmdbIdRouteImport } from './routes/filme/$tmdbId'
 
+const MinhaListaRoute = MinhaListaRouteImport.update({
+  id: '/minha-lista',
+  path: '/minha-lista',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IptvRoute = IptvRouteImport.update({
   id: '/iptv',
   path: '/iptv',
@@ -45,6 +51,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/buscar': typeof BuscarRoute
   '/iptv': typeof IptvRoute
+  '/minha-lista': typeof MinhaListaRoute
   '/filme/$tmdbId': typeof FilmeTmdbIdRoute
   '/serie/$tmdbId': typeof SerieTmdbIdRoute
 }
@@ -52,6 +59,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/buscar': typeof BuscarRoute
   '/iptv': typeof IptvRoute
+  '/minha-lista': typeof MinhaListaRoute
   '/filme/$tmdbId': typeof FilmeTmdbIdRoute
   '/serie/$tmdbId': typeof SerieTmdbIdRoute
 }
@@ -60,19 +68,33 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/buscar': typeof BuscarRoute
   '/iptv': typeof IptvRoute
+  '/minha-lista': typeof MinhaListaRoute
   '/filme/$tmdbId': typeof FilmeTmdbIdRoute
   '/serie/$tmdbId': typeof SerieTmdbIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/buscar' | '/iptv' | '/filme/$tmdbId' | '/serie/$tmdbId'
+  fullPaths:
+    | '/'
+    | '/buscar'
+    | '/iptv'
+    | '/minha-lista'
+    | '/filme/$tmdbId'
+    | '/serie/$tmdbId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/buscar' | '/iptv' | '/filme/$tmdbId' | '/serie/$tmdbId'
+  to:
+    | '/'
+    | '/buscar'
+    | '/iptv'
+    | '/minha-lista'
+    | '/filme/$tmdbId'
+    | '/serie/$tmdbId'
   id:
     | '__root__'
     | '/'
     | '/buscar'
     | '/iptv'
+    | '/minha-lista'
     | '/filme/$tmdbId'
     | '/serie/$tmdbId'
   fileRoutesById: FileRoutesById
@@ -81,12 +103,20 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BuscarRoute: typeof BuscarRoute
   IptvRoute: typeof IptvRoute
+  MinhaListaRoute: typeof MinhaListaRoute
   FilmeTmdbIdRoute: typeof FilmeTmdbIdRoute
   SerieTmdbIdRoute: typeof SerieTmdbIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/minha-lista': {
+      id: '/minha-lista'
+      path: '/minha-lista'
+      fullPath: '/minha-lista'
+      preLoaderRoute: typeof MinhaListaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/iptv': {
       id: '/iptv'
       path: '/iptv'
@@ -129,6 +159,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BuscarRoute: BuscarRoute,
   IptvRoute: IptvRoute,
+  MinhaListaRoute: MinhaListaRoute,
   FilmeTmdbIdRoute: FilmeTmdbIdRoute,
   SerieTmdbIdRoute: SerieTmdbIdRoute,
 }

@@ -14,12 +14,14 @@ export function HomeCarouselRow({
   onOpen,
   onPlay,
   onToggleFav,
+  onViewAll,
 }: {
   title: string;
   items: LibraryItem[];
   onOpen: (item: LibraryItem) => void;
   onPlay: (item: LibraryItem) => void;
   onToggleFav?: (item: LibraryItem) => void;
+  onViewAll?: () => void;
 }) {
   if (items.length === 0) return null;
 
@@ -27,6 +29,14 @@ export function HomeCarouselRow({
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        {onViewAll ? (
+          <button
+            onClick={onViewAll}
+            className="text-xs text-muted-foreground hover:text-foreground transition"
+          >
+            Ver tudo
+          </button>
+        ) : null}
       </div>
 
       <div className="relative">

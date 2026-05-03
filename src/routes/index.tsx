@@ -10,6 +10,8 @@ import { Player } from "@/components/Player";
 import { SeriesCard } from "@/components/SeriesCard";
 import { HeroCarousel, type HeroSlide } from "@/components/iptv/HeroCarousel";
 import { Button } from "@/components/ui/button";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { MovieTile } from "@/components/MovieTile";
 import { getSeriesAll, type Series } from "@/lib/series";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 import { migrateLocalStorageToServer } from "@/lib/api";
@@ -43,6 +45,7 @@ function HomePage() {
   const [showMigrationBanner, setShowMigrationBanner] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [migrationDone, setMigrationDone] = useState(false);
+  const [viewAll, setViewAll] = useState<{ title: string; items: LibraryItem[] } | null>(null);
 
   useEffect(() => {
     Promise.all([getAll(), getSeriesAll()]).then(([items, series]) => {
@@ -220,7 +223,7 @@ function HomePage() {
 
       <main className="mx-auto max-w-xl px-4 py-6 space-y-10">
         {loading ? (
-          <p className="text-muted-foreground">Carregando biblioteca...</p>
+          <HomeLoading />
         ) : items.length === 0 && series.length === 0 ? (
           <EmptyState onAdd={() => setShowAdd(true)} />
         ) : (
@@ -234,6 +237,9 @@ function HomePage() {
                   onOpen={handleOpen}
                   onPlay={handlePlay}
                   onToggleFav={handleToggleFav}
+                  onViewAll={() =>
+                    setViewAll({ title: "Continuar assistindo", items: continueSorted })
+                  }
                 />
                 <section id="minha-lista" className="scroll-mt-20">
                   <HomeCarouselRow
@@ -242,6 +248,9 @@ function HomePage() {
                     onOpen={handleOpen}
                     onPlay={handlePlay}
                     onToggleFav={handleToggleFav}
+                    onViewAll={() => {
+                      window.location.href = "/minha-lista";
+                    }}
                   />
                 </section>
                 <HomeCarouselRow
@@ -250,6 +259,9 @@ function HomePage() {
                   onOpen={handleOpen}
                   onPlay={handlePlay}
                   onToggleFav={handleToggleFav}
+                  onViewAll={() =>
+                    setViewAll({ title: "Adicionados recentemente", items: recentlyAdded })
+                  }
                 />
                 {yearRows.map((row) => (
                   <HomeCarouselRow
@@ -259,6 +271,7 @@ function HomePage() {
                     onOpen={handleOpen}
                     onPlay={handlePlay}
                     onToggleFav={handleToggleFav}
+                    onViewAll={() => setViewAll({ title: `Ano ${row.year}`, items: row.items })}
                   />
                 ))}
               </>
@@ -303,6 +316,66 @@ function HomePage() {
       {playing && (
         <Player item={playing} onClose={() => setPlaying(null)} onProgress={handleProgress} />
       )}
+
+      <Drawer open={!!viewAll} onOpenChange={(o) => !o && setViewAll(null)}>
+        <DrawerContent className="rounded-t-3xl border-border/40 bg-background/95 backdrop-blur-xl">
+          <DrawerHeader className="text-left">
+            <DrawerTitle className="font-display text-2xl tracking-wide">
+              {viewAll?.title ?? ""}
+            </DrawerTitle>
+          </DrawerHeader>
+          <div className="px-4 pb-6">
+            <div className="grid grid-cols-3 gap-3">
+              {(viewAll?.items ?? []).map((item) => (
+                <MovieTile
+                  key={item.id}
+                  item={item}
+                  onOpen={(it) => {
+                    setViewAll(null);
+                    handleOpen(it);
+                  }}
+                  onPlay={(it) => {
+                    setViewAll(null);
+                    handlePlay(it);
+                  }}
+                  onToggleFav={handleToggleFav}
+                />
+              ))}
+            </div>
+          </div>
+        </DrawerContent>
+      </Drawer>
+    </div>
+  );
+}
+
+function HomeLoading() {
+  return (
+    <div className="space-y-10">
+      <div className="-mx-4 overflow-hidden rounded-3xl border border-border/40 bg-white/5">
+        <div className="h-[62vh] min-h-[440px] max-h-[640px] bg-primary/10 animate-pulse" />
+        <div className="px-6 pb-4 pt-3 flex items-center justify-center gap-2">
+          <div className="h-1.5 w-6 rounded-full bg-primary/30" />
+          <div className="h-1.5 w-2 rounded-full bg-white/15" />
+          <div className="h-1.5 w-2 rounded-full bg-white/15" />
+        </div>
+      </div>
+
+      {Array.from({ length: 3 }).map((_, idx) => (
+        <div key={idx} className="space-y-3">
+          <div className="h-4 w-40 rounded bg-white/10 animate-pulse" />
+          <div className="-mx-4 px-4 overflow-x-hidden">
+            <div className="flex gap-3">
+              {Array.from({ length: 4 }).map((__, j) => (
+                <div
+                  key={j}
+                  className="w-[118px] aspect-[2/3] rounded-2xl border border-border/40 bg-white/5 animate-pulse"
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

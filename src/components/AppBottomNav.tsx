@@ -14,7 +14,7 @@ export function AppBottomNav() {
       ? "search"
       : pathname === "/iptv"
         ? "iptv"
-        : hash === "#minha-lista"
+        : pathname === "/minha-lista"
           ? "favorites"
           : hash === "#series"
             ? "series"
@@ -33,7 +33,7 @@ export function AppBottomNav() {
     { key: "home", label: "Home", Icon: Home, to: "/" },
     { key: "search", label: "Buscar", Icon: Search, to: "/buscar" },
     { key: "iptv", label: "TV", Icon: Tv, to: "/iptv" },
-    { key: "favorites", label: "Lista", Icon: Heart, href: "/#minha-lista" },
+    { key: "favorites", label: "Lista", Icon: Heart, to: "/minha-lista" },
     { key: "series", label: "Séries", Icon: Film, href: "/#series" },
   ];
 
