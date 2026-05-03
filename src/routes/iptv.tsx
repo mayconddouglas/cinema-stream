@@ -1,9 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
-import { Check, Copy, Loader2, Play, Plus, Star, Tv, X } from "lucide-react";
-import { Header } from "@/components/Header";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronDown, Loader2, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { BottomNav, type IptvNavKey } from "@/components/iptv/BottomNav";
+import { AccountDrawer, type IptvAccount } from "@/components/iptv/AccountDrawer";
+import { AddAccountDrawer } from "@/components/iptv/AddAccountDrawer";
+import { HeroCarousel, type HeroSlide } from "@/components/iptv/HeroCarousel";
+import { PlayerOverlay, type PlayerItem } from "@/components/iptv/PlayerOverlay";
+import { Row, type RowItem } from "@/components/iptv/Row";
 import {
   iptvActivateAccount,
   iptvCreateAccount,
@@ -20,16 +25,7 @@ import {
   iptvVodRelayUrl,
 } from "@/lib/api";
 
-type IptvAccount = {
-  id: number;
-  name: string;
-  baseUrl: string;
-  username: string;
-  isActive: boolean;
-  lastSyncAt: number;
-};
-
-type IptvCategory = { category_id: string; category_name: string; parent_id?: string | null };
+type IptvCategory = { category_id: string; category_name: string };
 
 type IptvLiveStream = {
   stream_id: number;
@@ -37,8 +33,6 @@ type IptvLiveStream = {
   category_id?: string | null;
   stream_icon?: string | null;
   favorite: number;
-  added_at?: number | null;
-  last_played_at?: number | null;
 };
 
 type IptvVodStream = {
@@ -47,15 +41,6 @@ type IptvVodStream = {
   category_id?: string | null;
   stream_icon?: string | null;
   favorite: number;
-  added_at?: number | null;
-  last_played_at?: number | null;
-};
-
-type ActivePlayer = {
-  type: "live" | "vod";
-  id: number;
-  name: string;
-  logo?: string | null;
 };
 
 function getVlcDeepLink(streamUrl: string): string {
@@ -67,92 +52,32 @@ function getVlcDeepLink(streamUrl: string): string {
   return streamUrl.replace(/^https?:\/\//, "vlc://");
 }
 
-function nowIso(ts: number): string {
-  if (!ts) return "";
-  try {
-    return new Date(ts).toLocaleString();
-  } catch {
-    return "";
-  }
-}
-
-type HomeRowItem = {
-  key: string;
-  title: string;
-  image: string;
-  aspect: "wide" | "poster";
-  favorite: boolean;
-  onPlay: () => void;
-  onToggleFavorite: () => void;
-};
-
-function HomeRow({ title, items }: { title: string; items: HomeRowItem[] }) {
-  return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-foreground">{title}</h3>
-      </div>
-      <div className="-mx-6 px-6 overflow-x-auto pb-2">
-        <div className="flex gap-3 snap-x snap-mandatory">
-          {items.map((it) => (
-            <div
-              key={it.key}
-              className={`snap-start shrink-0 ${
-                it.aspect === "poster" ? "w-[120px] sm:w-[150px]" : "w-[220px] sm:w-[260px]"
-              }`}
-            >
-              <div className="relative">
-                <button
-                  onClick={it.onPlay}
-                  className={`block w-full overflow-hidden rounded-xl border border-border/40 bg-secondary/30 ${
-                    it.aspect === "poster" ? "aspect-[2/3]" : "aspect-video"
-                  }`}
-                >
-                  {it.image ? (
-                    <img src={it.image} alt="" className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="h-full w-full bg-secondary/40" />
-                  )}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/0 to-black/0" />
-                  <div className="absolute bottom-0 left-0 right-0 p-2">
-                    <p className="text-xs text-foreground line-clamp-2">{it.title}</p>
-                  </div>
-                </button>
-                <button
-                  onClick={it.onToggleFavorite}
-                  className="absolute top-2 right-2 rounded-full bg-black/50 border border-border/40 p-2 hover:bg-black/60 transition"
-                  title="Favoritar"
-                >
-                  <Star
-                    className={`h-4 w-4 ${it.favorite ? "text-yellow-400" : "text-muted-foreground"}`}
-                  />
-                </button>
-              </div>
-            </div>
-          ))}
-          {items.length === 0 ? (
-            <div className="py-6 text-sm text-muted-foreground">Nada para mostrar.</div>
-          ) : null}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 export const Route = createFileRoute("/iptv")({
   head: () => ({
-    meta: [{ title: "IPTV — Buffet de Vídeo" }],
+    meta: [{ title: "Acervos de Filmes — IPTV" }],
   }),
   component: IptvPage,
 });
 
 function IptvPage() {
-  const [view, setView] = useState<"home" | "live" | "vod">("home");
+  const [nav, setNav] = useState<IptvNavKey>("home");
+
   const [accounts, setAccounts] = useState<IptvAccount[]>([]);
-  const [activeAccountId, setActiveAccountId] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [activeId, setActiveId] = useState<number | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const [accountDrawerOpen, setAccountDrawerOpen] = useState(false);
+  const [addDrawerOpen, setAddDrawerOpen] = useState(false);
+
+  const [liveCategories, setLiveCategories] = useState<IptvCategory[]>([]);
+  const [vodCategories, setVodCategories] = useState<IptvCategory[]>([]);
+  const [liveCategory, setLiveCategory] = useState<string>("");
+  const [vodCategory, setVodCategory] = useState<string>("");
+
+  const [liveQuery, setLiveQuery] = useState("");
+  const [vodQuery, setVodQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
 
   const [homeRecentLive, setHomeRecentLive] = useState<IptvLiveStream[]>([]);
   const [homeRecentVod, setHomeRecentVod] = useState<IptvVodStream[]>([]);
@@ -161,884 +86,625 @@ function IptvPage() {
   const [homeLive, setHomeLive] = useState<IptvLiveStream[]>([]);
   const [homeVod, setHomeVod] = useState<IptvVodStream[]>([]);
 
-  const [liveCategories, setLiveCategories] = useState<IptvCategory[]>([]);
-  const [liveCategoryId, setLiveCategoryId] = useState<string>("");
-  const [liveQuery, setLiveQuery] = useState("");
-  const [liveOnlyFav, setLiveOnlyFav] = useState(false);
-  const [liveStreams, setLiveStreams] = useState<IptvLiveStream[]>([]);
+  const [liveList, setLiveList] = useState<IptvLiveStream[]>([]);
+  const [vodList, setVodList] = useState<IptvVodStream[]>([]);
+  const [listLive, setListLive] = useState<IptvLiveStream[]>([]);
+  const [listVod, setListVod] = useState<IptvVodStream[]>([]);
 
-  const [vodCategories, setVodCategories] = useState<IptvCategory[]>([]);
-  const [vodCategoryId, setVodCategoryId] = useState<string>("");
-  const [vodQuery, setVodQuery] = useState("");
-  const [vodOnlyFav, setVodOnlyFav] = useState(false);
-  const [vodStreams, setVodStreams] = useState<IptvVodStream[]>([]);
-
-  const [addOpen, setAddOpen] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newBaseUrl, setNewBaseUrl] = useState("");
-  const [newUser, setNewUser] = useState("");
-  const [newPass, setNewPass] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const [player, setPlayer] = useState<ActivePlayer | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [playerLoading, setPlayerLoading] = useState(false);
-  const [playerError, setPlayerError] = useState(false);
+  const [player, setPlayer] = useState<PlayerItem | null>(null);
 
   const activeAccount = useMemo(
-    () => accounts.find((a) => a.id === activeAccountId) ?? null,
-    [accounts, activeAccountId],
+    () => accounts.find((a) => a.id === activeId) ?? null,
+    [accounts, activeId],
   );
 
-  const refreshLists = async () => {
+  const refreshStatus = useCallback(async () => {
     const [acc, status] = await Promise.all([iptvGetAccounts(), iptvGetActiveStatus()]);
-    const parsedAcc = (acc as IptvAccount[]).map((a) => ({
-      ...a,
-      baseUrl:
-        (a.baseUrl as unknown as string) || (a as unknown as { base_url?: string }).base_url || "",
-    }));
-    setAccounts(parsedAcc);
-    const active = (status as { active?: IptvAccount | null }).active ?? null;
-    setActiveAccountId(active?.id ?? null);
+    setAccounts(acc as IptvAccount[]);
+    const active = (status as { active?: { id?: number } | null }).active;
+    setActiveId(active?.id ?? null);
     setSyncing(Boolean((status as { syncing?: boolean }).syncing));
-    setSyncError(((status as { error?: string | null }).error as string | null) ?? null);
     return {
       activeId: active?.id ?? null,
       syncing: Boolean((status as { syncing?: boolean }).syncing),
     };
-  };
+  }, []);
 
-  const loadLive = async (accountId: number) => {
-    const cats = (await iptvGetLiveCategories()) as IptvCategory[];
-    setLiveCategories(cats);
-    const first = liveCategoryId || cats[0]?.category_id || "";
-    setLiveCategoryId(first);
-    const list = (await iptvGetLiveStreams({
-      categoryId: first,
-      q: liveQuery,
-      onlyFavorites: liveOnlyFav,
-    })) as IptvLiveStream[];
-    setLiveStreams(list);
-    void accountId;
-  };
+  const waitSync = useCallback(async (tries = 90) => {
+    for (let i = 0; i < tries; i++) {
+      const status = (await iptvGetActiveStatus()) as {
+        syncing?: boolean;
+        active?: { id?: number } | null;
+      };
+      const s = Boolean(status.syncing);
+      setSyncing(s);
+      if (!s) return;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }, []);
 
-  const loadVod = async (accountId: number) => {
-    const cats = (await iptvGetVodCategories()) as IptvCategory[];
-    setVodCategories(cats);
-    const first = vodCategoryId || cats[0]?.category_id || "";
-    setVodCategoryId(first);
-    const list = (await iptvGetVodStreams({
-      categoryId: first,
-      q: vodQuery,
-      onlyFavorites: vodOnlyFav,
-    })) as IptvVodStream[];
-    setVodStreams(list);
-    void accountId;
-  };
+  const loadCategories = useCallback(async () => {
+    const [lc, vc] = await Promise.all([iptvGetLiveCategories(), iptvGetVodCategories()]);
+    const liveCats = lc as IptvCategory[];
+    const vodCats = vc as IptvCategory[];
+    setLiveCategories(liveCats);
+    setVodCategories(vodCats);
+    setLiveCategory((prev) => prev || liveCats[0]?.category_id || "");
+    setVodCategory((prev) => prev || vodCats[0]?.category_id || "");
+  }, []);
 
-  const loadHome = async () => {
-    const [recentLive, recentVod, favLive, favVod, liveAll, vodAll] = await Promise.all([
-      iptvGetRecent({ type: "live", limit: 20 }),
-      iptvGetRecent({ type: "vod", limit: 20 }),
+  const loadHome = useCallback(async () => {
+    const [recentLive, recentVod, favLive, favVod, anyLive, anyVod] = await Promise.all([
+      iptvGetRecent({ type: "live", limit: 18 }),
+      iptvGetRecent({ type: "vod", limit: 18 }),
       iptvGetLiveStreams({ onlyFavorites: true }),
       iptvGetVodStreams({ onlyFavorites: true }),
       iptvGetLiveStreams({}),
       iptvGetVodStreams({}),
     ]);
-
     setHomeRecentLive(recentLive as IptvLiveStream[]);
     setHomeRecentVod(recentVod as IptvVodStream[]);
-    setHomeFavLive((favLive as IptvLiveStream[]).slice(0, 20));
-    setHomeFavVod((favVod as IptvVodStream[]).slice(0, 20));
-    setHomeLive((liveAll as IptvLiveStream[]).slice(0, 20));
-    setHomeVod((vodAll as IptvVodStream[]).slice(0, 20));
-  };
+    setHomeFavLive((favLive as IptvLiveStream[]).slice(0, 18));
+    setHomeFavVod((favVod as IptvVodStream[]).slice(0, 18));
+    setHomeLive((anyLive as IptvLiveStream[]).slice(0, 18));
+    setHomeVod((anyVod as IptvVodStream[]).slice(0, 18));
+  }, []);
 
-  const waitSync = async (tries = 90) => {
-    for (let i = 0; i < tries; i++) {
-      const status = (await iptvGetActiveStatus()) as {
-        syncing?: boolean;
-        error?: string | null;
-        active?: { id?: number } | null;
-      };
-      setSyncing(Boolean(status.syncing));
-      setSyncError((status.error as string | null) ?? null);
-      if (!status.syncing) return;
-      await new Promise((r) => setTimeout(r, 2000));
+  const loadLists = useCallback(async () => {
+    const [live, vod, favLive, favVod] = await Promise.all([
+      iptvGetLiveStreams({ categoryId: liveCategory, q: liveQuery }),
+      iptvGetVodStreams({ categoryId: vodCategory, q: vodQuery }),
+      iptvGetLiveStreams({ onlyFavorites: true }),
+      iptvGetVodStreams({ onlyFavorites: true }),
+    ]);
+    setLiveList(live as IptvLiveStream[]);
+    setVodList(vod as IptvVodStream[]);
+    setListLive(favLive as IptvLiveStream[]);
+    setListVod(favVod as IptvVodStream[]);
+  }, [liveCategory, liveQuery, vodCategory, vodQuery]);
+
+  const activateAccount = useCallback(
+    async (id: number) => {
+      setAccountDrawerOpen(false);
+      setSyncing(true);
+      await iptvActivateAccount(id);
+      setActiveId(id);
+      await waitSync();
+      await Promise.all([loadCategories(), loadHome(), loadLists()]);
+    },
+    [loadCategories, loadHome, loadLists, waitSync],
+  );
+
+  const createAccount = useCallback(
+    async (payload: { name: string; baseUrl: string; username: string; password: string }) => {
+      await iptvCreateAccount(payload);
+      const { activeId, syncing } = await refreshStatus();
+      if (syncing) await waitSync();
+      if (activeId) {
+        await Promise.all([loadCategories(), loadHome(), loadLists()]);
+      }
+    },
+    [loadCategories, loadHome, loadLists, refreshStatus, waitSync],
+  );
+
+  const toggleFavorite = useCallback(
+    async (type: "live" | "vod", itemId: number, next: boolean) => {
+      await iptvSetFavorite({ type, itemId: String(itemId), value: next });
+      await Promise.all([loadHome(), loadLists()]);
+    },
+    [loadHome, loadLists],
+  );
+
+  const openVod = useCallback(
+    async (m: IptvVodStream) => {
+      const url = iptvVodRelayUrl(m.stream_id);
+      await iptvTouchRecent({ type: "vod", itemId: String(m.stream_id) });
+      setPlayer({
+        title: m.name,
+        image: m.stream_icon ?? "",
+        streamUrl: url,
+        vlcUrl: getVlcDeepLink(url),
+        favorite: m.favorite === 1,
+        onToggleFavorite: () => void toggleFavorite("vod", m.stream_id, m.favorite !== 1),
+        onClose: () => setPlayer(null),
+      });
+    },
+    [toggleFavorite],
+  );
+
+  const openLive = useCallback(
+    async (c: IptvLiveStream) => {
+      const url = iptvLiveRelayUrl(c.stream_id);
+      await iptvTouchRecent({ type: "live", itemId: String(c.stream_id) });
+      setPlayer({
+        title: c.name,
+        image: c.stream_icon ?? "",
+        streamUrl: url,
+        vlcUrl: getVlcDeepLink(url),
+        favorite: c.favorite === 1,
+        onToggleFavorite: () => void toggleFavorite("live", c.stream_id, c.favorite !== 1),
+        onClose: () => setPlayer(null),
+      });
+    },
+    [toggleFavorite],
+  );
+
+  const slides = useMemo(() => {
+    const slides: HeroSlide[] = [];
+    const pickVod = homeRecentVod[0] ?? homeVod[0] ?? null;
+    const pickLive = homeRecentLive[0] ?? homeLive[0] ?? null;
+    if (pickVod) {
+      slides.push({
+        key: `vod-${pickVod.stream_id}`,
+        title: pickVod.name,
+        subtitle: "Filme em destaque",
+        image: pickVod.stream_icon ?? "",
+        badge: "Filmes",
+        onPlay: () => void openVod(pickVod),
+        onVlc: () => {
+          const u = iptvVodRelayUrl(pickVod.stream_id);
+          window.location.href = getVlcDeepLink(u);
+        },
+      });
     }
-  };
+    if (pickLive) {
+      slides.push({
+        key: `live-${pickLive.stream_id}`,
+        title: pickLive.name,
+        subtitle: "Ao vivo agora",
+        image: pickLive.stream_icon ?? "",
+        badge: "Ao vivo",
+        onPlay: () => void openLive(pickLive),
+        onVlc: () => {
+          const u = iptvLiveRelayUrl(pickLive.stream_id);
+          window.location.href = getVlcDeepLink(u);
+        },
+      });
+    }
+    const moreVod = homeVod.slice(0, 3);
+    for (const m of moreVod) {
+      if (slides.some((s) => s.key === `vod-${m.stream_id}`)) continue;
+      slides.push({
+        key: `vod-${m.stream_id}`,
+        title: m.name,
+        subtitle: "Recomendado",
+        image: m.stream_icon ?? "",
+        badge: "Filmes",
+        onPlay: () => void openVod(m),
+        onVlc: () => {
+          const u = iptvVodRelayUrl(m.stream_id);
+          window.location.href = getVlcDeepLink(u);
+        },
+      });
+      if (slides.length >= 5) break;
+    }
+    return slides;
+  }, [homeRecentVod, homeVod, homeRecentLive, homeLive, openLive, openVod]);
 
-  const activate = async (id: number) => {
-    setSyncError(null);
-    setSyncing(true);
-    await iptvActivateAccount(id);
-    setActiveAccountId(id);
-    await waitSync();
-    await Promise.all([loadHome(), loadLive(id), loadVod(id)]);
-  };
+  const homeRows = useMemo(() => {
+    const rows: Array<{ title: string; action?: IptvNavKey; items: RowItem[] }> = [];
+
+    rows.push({
+      title: "Continuar assistindo",
+      action: "vod",
+      items: homeRecentVod.map((m) => ({
+        key: `rv-${m.stream_id}`,
+        title: m.name,
+        image: m.stream_icon,
+        kind: "vod",
+        favorite: m.favorite === 1,
+        onPlay: () => void openVod(m),
+        onToggleFavorite: () => void toggleFavorite("vod", m.stream_id, m.favorite !== 1),
+      })),
+    });
+
+    rows.push({
+      title: "Ao vivo — recentes",
+      action: "live",
+      items: homeRecentLive.map((c) => ({
+        key: `rl-${c.stream_id}`,
+        title: c.name,
+        image: c.stream_icon,
+        kind: "live",
+        favorite: c.favorite === 1,
+        onPlay: () => void openLive(c),
+        onToggleFavorite: () => void toggleFavorite("live", c.stream_id, c.favorite !== 1),
+      })),
+    });
+
+    rows.push({
+      title: "Favoritos",
+      action: "list",
+      items: [
+        ...homeFavVod.slice(0, 10).map((m) => ({
+          key: `fv-${m.stream_id}`,
+          title: m.name,
+          image: m.stream_icon,
+          kind: "vod" as const,
+          favorite: true,
+          onPlay: () => void openVod(m),
+          onToggleFavorite: () => void toggleFavorite("vod", m.stream_id, false),
+        })),
+        ...homeFavLive.slice(0, 10).map((c) => ({
+          key: `fl-${c.stream_id}`,
+          title: c.name,
+          image: c.stream_icon,
+          kind: "live" as const,
+          favorite: true,
+          onPlay: () => void openLive(c),
+          onToggleFavorite: () => void toggleFavorite("live", c.stream_id, false),
+        })),
+      ],
+    });
+
+    rows.push({
+      title: "Ao vivo — para explorar",
+      action: "live",
+      items: homeLive.map((c) => ({
+        key: `l-${c.stream_id}`,
+        title: c.name,
+        image: c.stream_icon,
+        kind: "live",
+        favorite: c.favorite === 1,
+        onPlay: () => void openLive(c),
+        onToggleFavorite: () => void toggleFavorite("live", c.stream_id, c.favorite !== 1),
+      })),
+    });
+
+    rows.push({
+      title: "Filmes — para explorar",
+      action: "vod",
+      items: homeVod.map((m) => ({
+        key: `v-${m.stream_id}`,
+        title: m.name,
+        image: m.stream_icon,
+        kind: "vod",
+        favorite: m.favorite === 1,
+        onPlay: () => void openVod(m),
+        onToggleFavorite: () => void toggleFavorite("vod", m.stream_id, m.favorite !== 1),
+      })),
+    });
+
+    return rows.filter((r) => r.items.length > 0);
+  }, [
+    homeRecentVod,
+    homeRecentLive,
+    homeFavVod,
+    homeFavLive,
+    homeLive,
+    homeVod,
+    openLive,
+    openVod,
+    toggleFavorite,
+  ]);
 
   useEffect(() => {
     setLoading(true);
-    refreshLists()
+    refreshStatus()
       .then(async ({ activeId, syncing }) => {
         if (!activeId) return;
         if (syncing) await waitSync();
-        await Promise.all([loadHome(), loadLive(activeId), loadVod(activeId)]);
+        await Promise.all([loadCategories(), loadHome(), loadLists()]);
       })
-      .catch(() => void 0)
       .finally(() => setLoading(false));
-  }, []);
+  }, [loadCategories, loadHome, loadLists, refreshStatus, waitSync]);
 
   useEffect(() => {
-    if (!activeAccountId) return;
-    if (view === "live") {
-      iptvGetLiveStreams({
-        categoryId: liveCategoryId,
-        q: liveQuery,
-        onlyFavorites: liveOnlyFav,
-      })
-        .then((r) => setLiveStreams(r as IptvLiveStream[]))
-        .catch(() => void 0);
-      return;
-    }
-    if (view === "vod") {
-      iptvGetVodStreams({
-        categoryId: vodCategoryId,
-        q: vodQuery,
-        onlyFavorites: vodOnlyFav,
-      })
-        .then((r) => setVodStreams(r as IptvVodStream[]))
-        .catch(() => void 0);
-    }
-  }, [
-    activeAccountId,
-    view,
-    liveCategoryId,
-    liveQuery,
-    liveOnlyFav,
-    vodCategoryId,
-    vodQuery,
-    vodOnlyFav,
-  ]);
+    if (!activeId) return;
+    if (nav === "live") void loadLists();
+    if (nav === "vod") void loadLists();
+    if (nav === "list") void loadLists();
+  }, [activeId, loadLists, nav]);
 
-  const handleSaveAccount = async () => {
-    setSaving(true);
-    try {
-      const payload = { name: newName, baseUrl: newBaseUrl, username: newUser, password: newPass };
-      await iptvCreateAccount(payload);
-      setAddOpen(false);
-      setNewName("");
-      setNewBaseUrl("");
-      setNewUser("");
-      setNewPass("");
-      const { activeId } = await refreshLists();
-      if (activeId) {
-        await waitSync();
-        await Promise.all([loadHome(), loadLive(activeId), loadVod(activeId)]);
-      }
-    } catch {
-      void 0;
-    } finally {
-      setSaving(false);
-    }
-  };
+  useEffect(() => {
+    if (!activeId) return;
+    const t = setTimeout(() => {
+      if (nav === "live") void loadLists();
+      if (nav === "vod") void loadLists();
+    }, 350);
+    return () => clearTimeout(t);
+  }, [activeId, liveQuery, loadLists, nav, vodQuery]);
 
-  const openPlayer = async (next: ActivePlayer) => {
-    setPlayer(next);
-    setCopied(false);
-    setPlayerLoading(true);
-    setPlayerError(false);
-    const id = String(next.id);
-    await iptvTouchRecent({ type: next.type, itemId: id });
-    void loadHome();
-  };
-
-  const streamUrl = useMemo(() => {
-    if (!player) return "";
-    return player.type === "live" ? iptvLiveRelayUrl(player.id) : iptvVodRelayUrl(player.id);
-  }, [player]);
-
-  const vlcUrl = useMemo(() => (streamUrl ? getVlcDeepLink(streamUrl) : ""), [streamUrl]);
-
-  const featured = useMemo(() => {
-    const vod = homeRecentVod[0] ?? homeVod[0] ?? null;
-    if (vod) {
-      const url = iptvVodRelayUrl(vod.stream_id);
-      return {
-        type: "vod" as const,
-        title: vod.name,
-        image: vod.stream_icon ?? "",
-        player: {
-          type: "vod" as const,
-          id: vod.stream_id,
-          name: vod.name,
-          logo: vod.stream_icon,
-        },
-        vlcUrl: getVlcDeepLink(url),
-      };
-    }
-    const live = homeRecentLive[0] ?? homeLive[0] ?? null;
-    if (live) {
-      const url = iptvLiveRelayUrl(live.stream_id);
-      return {
-        type: "live" as const,
-        title: live.name,
-        image: live.stream_icon ?? "",
-        player: {
-          type: "live" as const,
-          id: live.stream_id,
-          name: live.name,
-          logo: live.stream_icon,
-        },
-        vlcUrl: getVlcDeepLink(url),
-      };
-    }
-    return null;
-  }, [homeRecentLive, homeRecentVod, homeLive, homeVod]);
-
-  const copyUrl = async () => {
-    if (!streamUrl) return;
-    try {
-      await navigator.clipboard.writeText(streamUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      void 0;
-    }
-  };
-
-  const toggleFavorite = async (type: "live" | "vod", streamId: number, next: boolean) => {
-    try {
-      await iptvSetFavorite({ type, itemId: String(streamId), value: next });
-      if (type === "live") {
-        setLiveStreams((prev) =>
-          prev.map((s) => (s.stream_id === streamId ? { ...s, favorite: next ? 1 : 0 } : s)),
-        );
-      } else {
-        setVodStreams((prev) =>
-          prev.map((s) => (s.stream_id === streamId ? { ...s, favorite: next ? 1 : 0 } : s)),
-        );
-      }
-      void loadHome();
-    } catch {
-      void 0;
-    }
-  };
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return { live: [], vod: [] };
+    const live = homeLive.filter((s) => s.name.toLowerCase().includes(q)).slice(0, 20);
+    const vod = homeVod.filter((m) => m.name.toLowerCase().includes(q)).slice(0, 20);
+    return { live, vod };
+  }, [searchQuery, homeLive, homeVod]);
 
   return (
-    <div className="min-h-screen">
-      <Header />
-
-      <main className="container mx-auto px-6 py-8 space-y-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <h1 className="font-display text-3xl text-cream flex items-center gap-2">
-              <Tv className="h-5 w-5 text-primary" />
-              IPTV
+    <div className="min-h-screen pb-[92px]">
+      <div className="sticky top-0 z-30 border-b border-border/40 bg-background/70 backdrop-blur-xl">
+        <div className="mx-auto max-w-xl px-4 py-4 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">Acervos de</p>
+            <h1 className="font-display text-3xl leading-none tracking-wide text-foreground truncate">
+              Filmes
             </h1>
-            <p className="text-sm text-muted-foreground">
-              Conta ativa: {activeAccount?.name ?? "nenhuma"}{" "}
-              {activeAccount?.lastSyncAt
-                ? `• Última sync: ${nowIso(activeAccount.lastSyncAt)}`
-                : ""}
-            </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <select
-              value={activeAccountId ?? ""}
-              onChange={(e) => void activate(Number(e.target.value))}
-              disabled={!accounts.length || syncing}
-              className="h-11 rounded-lg bg-secondary/50 border border-border/40 px-3 text-sm"
-            >
-              <option value="" disabled>
-                Selecione a conta
-              </option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={() => setAddOpen(true)}
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground hover:brightness-110 transition min-h-[44px]"
-            >
-              <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">Adicionar</span>
-            </button>
-          </div>
+          <button
+            onClick={() => setAccountDrawerOpen(true)}
+            className="shrink-0 rounded-2xl border border-border/40 bg-white/5 px-4 py-2 text-left hover:bg-white/10 transition min-h-[44px]"
+          >
+            <div className="flex items-center gap-2">
+              <div className="min-w-0">
+                <p className="text-[10px] text-muted-foreground leading-none">Conta</p>
+                <p className="text-xs text-foreground truncate">
+                  {activeAccount?.name ?? "Selecionar"}
+                </p>
+              </div>
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </button>
         </div>
+      </div>
 
-        {syncError && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            Falha ao sincronizar. Verifique usuário/senha/URL do provedor e tente novamente.
-          </div>
-        )}
-
+      <main className="mx-auto max-w-xl px-4 py-6 space-y-6">
         {loading ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Carregando...
           </div>
-        ) : !accounts.length ? (
-          <div className="rounded-xl border border-border/40 bg-card p-6 space-y-3">
-            <p className="text-sm text-muted-foreground">Nenhuma conta IPTV cadastrada.</p>
-            <button
-              onClick={() => setAddOpen(true)}
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground hover:brightness-110 transition"
-            >
-              <Plus className="h-4 w-4" />
-              Adicionar conta
-            </button>
-          </div>
-        ) : !activeAccountId ? (
-          <div className="rounded-xl border border-border/40 bg-card p-6">
+        ) : accounts.length === 0 ? (
+          <div className="rounded-3xl border border-border/40 bg-white/5 p-6 space-y-4">
+            <h2 className="font-display text-3xl text-foreground">Adicionar conta IPTV</h2>
             <p className="text-sm text-muted-foreground">
-              Selecione uma conta para sincronizar e visualizar os canais/filmes.
+              Conecte seu provedor Xtream para importar canais ao vivo e filmes.
             </p>
+            <Button onClick={() => setAddDrawerOpen(true)} size="lg" className="w-full rounded-2xl">
+              <Plus className="h-4 w-4" />
+              Importar conta
+            </Button>
+          </div>
+        ) : !activeId ? (
+          <div className="rounded-3xl border border-border/40 bg-white/5 p-6 space-y-4">
+            <h2 className="font-display text-3xl text-foreground">Selecione uma conta</h2>
+            <p className="text-sm text-muted-foreground">
+              Abra “Conta” no topo para escolher qual catálogo usar.
+            </p>
+            <Button
+              onClick={() => setAccountDrawerOpen(true)}
+              size="lg"
+              className="w-full rounded-2xl"
+            >
+              Selecionar conta
+            </Button>
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                onClick={() => setView("home")}
-                className={`rounded-lg px-4 py-2 text-sm border transition ${
-                  view === "home"
-                    ? "bg-primary text-primary-foreground border-primary/40"
-                    : "bg-secondary/30 text-muted-foreground border-border/40 hover:bg-secondary/50 hover:text-foreground"
-                }`}
-              >
-                Home
-              </button>
-              <button
-                onClick={() => setView("live")}
-                className={`rounded-lg px-4 py-2 text-sm border transition ${
-                  view === "live"
-                    ? "bg-primary text-primary-foreground border-primary/40"
-                    : "bg-secondary/30 text-muted-foreground border-border/40 hover:bg-secondary/50 hover:text-foreground"
-                }`}
-              >
-                Ao vivo
-              </button>
-              <button
-                onClick={() => setView("vod")}
-                className={`rounded-lg px-4 py-2 text-sm border transition ${
-                  view === "vod"
-                    ? "bg-primary text-primary-foreground border-primary/40"
-                    : "bg-secondary/30 text-muted-foreground border-border/40 hover:bg-secondary/50 hover:text-foreground"
-                }`}
-              >
-                Filmes
-              </button>
-              {syncing && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground ml-2">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Sincronizando...
-                </div>
-              )}
-            </div>
-
-            {view === "home" ? (
-              <div className="space-y-10">
-                <div className="-mx-6 overflow-hidden rounded-3xl border border-border/40 bg-card">
-                  <div className="relative h-[58vh] min-h-[420px] max-h-[620px]">
-                    {featured?.image ? (
-                      <img
-                        src={featured.image}
-                        alt=""
-                        className="absolute inset-0 h-full w-full object-cover opacity-90"
-                      />
-                    ) : (
-                      <div className="absolute inset-0 bg-secondary/40" />
-                    )}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/70 to-black/10" />
-                    <div className="absolute inset-0 px-6 pb-8 pt-10 flex flex-col justify-end">
-                      <div className="space-y-4 max-w-xl">
-                        <div className="inline-flex items-center gap-2 rounded-full bg-black/40 border border-border/40 px-3 py-1 text-xs text-muted-foreground w-fit">
-                          <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                          {featured?.type === "live" ? "Ao vivo" : "Filme"}
-                        </div>
-                        <h2 className="font-display text-4xl sm:text-5xl leading-[0.95] text-cream">
-                          {featured?.title ?? "IPTV"}
-                        </h2>
-                        <p className="text-sm text-muted-foreground line-clamp-2">
-                          Explore canais ao vivo e filmes com uma experiência estilo catálogo.
-                        </p>
-                        <div className="flex gap-2 flex-wrap">
-                          <button
-                            onClick={() => (featured ? void openPlayer(featured.player) : void 0)}
-                            className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-primary-foreground hover:brightness-110 transition min-h-[48px]"
-                          >
-                            <Play className="h-4 w-4" />
-                            Assistir
-                          </button>
-                          <a
-                            href={featured?.vlcUrl ?? ""}
-                            className="inline-flex items-center gap-2 rounded-xl bg-secondary/50 border border-border/40 px-5 py-3 text-sm text-foreground hover:bg-secondary/70 transition min-h-[48px]"
-                          >
-                            Abrir no VLC
-                          </a>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {homeRecentLive.length > 0 ? (
-                  <HomeRow
-                    title="Ao vivo — recentes"
-                    items={homeRecentLive.map((s) => ({
-                      key: `rl-${s.stream_id}`,
-                      title: s.name,
-                      image: s.stream_icon ?? "",
-                      aspect: "wide",
-                      favorite: s.favorite === 1,
-                      onPlay: () =>
-                        void openPlayer({
-                          type: "live",
-                          id: s.stream_id,
-                          name: s.name,
-                          logo: s.stream_icon,
-                        }),
-                      onToggleFavorite: () =>
-                        void toggleFavorite("live", s.stream_id, s.favorite !== 1),
-                    }))}
-                  />
-                ) : null}
-
-                {homeRecentVod.length > 0 ? (
-                  <HomeRow
-                    title="Continuar assistindo"
-                    items={homeRecentVod.map((m) => ({
-                      key: `rv-${m.stream_id}`,
-                      title: m.name,
-                      image: m.stream_icon ?? "",
-                      aspect: "poster",
-                      favorite: m.favorite === 1,
-                      onPlay: () =>
-                        void openPlayer({
-                          type: "vod",
-                          id: m.stream_id,
-                          name: m.name,
-                          logo: m.stream_icon,
-                        }),
-                      onToggleFavorite: () =>
-                        void toggleFavorite("vod", m.stream_id, m.favorite !== 1),
-                    }))}
-                  />
-                ) : null}
-
-                {homeFavLive.length > 0 ? (
-                  <HomeRow
-                    title="Canais favoritos"
-                    items={homeFavLive.map((s) => ({
-                      key: `fl-${s.stream_id}`,
-                      title: s.name,
-                      image: s.stream_icon ?? "",
-                      aspect: "wide",
-                      favorite: s.favorite === 1,
-                      onPlay: () =>
-                        void openPlayer({
-                          type: "live",
-                          id: s.stream_id,
-                          name: s.name,
-                          logo: s.stream_icon,
-                        }),
-                      onToggleFavorite: () =>
-                        void toggleFavorite("live", s.stream_id, s.favorite !== 1),
-                    }))}
-                  />
-                ) : null}
-
-                {homeFavVod.length > 0 ? (
-                  <HomeRow
-                    title="Filmes favoritos"
-                    items={homeFavVod.map((m) => ({
-                      key: `fv-${m.stream_id}`,
-                      title: m.name,
-                      image: m.stream_icon ?? "",
-                      aspect: "poster",
-                      favorite: m.favorite === 1,
-                      onPlay: () =>
-                        void openPlayer({
-                          type: "vod",
-                          id: m.stream_id,
-                          name: m.name,
-                          logo: m.stream_icon,
-                        }),
-                      onToggleFavorite: () =>
-                        void toggleFavorite("vod", m.stream_id, m.favorite !== 1),
-                    }))}
-                  />
-                ) : null}
-
-                {homeLive.length > 0 ? (
-                  <HomeRow
-                    title="Ao vivo — para explorar"
-                    items={homeLive.map((s) => ({
-                      key: `l-${s.stream_id}`,
-                      title: s.name,
-                      image: s.stream_icon ?? "",
-                      aspect: "wide",
-                      favorite: s.favorite === 1,
-                      onPlay: () =>
-                        void openPlayer({
-                          type: "live",
-                          id: s.stream_id,
-                          name: s.name,
-                          logo: s.stream_icon,
-                        }),
-                      onToggleFavorite: () =>
-                        void toggleFavorite("live", s.stream_id, s.favorite !== 1),
-                    }))}
-                  />
-                ) : null}
-
-                {homeVod.length > 0 ? (
-                  <HomeRow
-                    title="Filmes — para explorar"
-                    items={homeVod.map((m) => ({
-                      key: `v-${m.stream_id}`,
-                      title: m.name,
-                      image: m.stream_icon ?? "",
-                      aspect: "poster",
-                      favorite: m.favorite === 1,
-                      onPlay: () =>
-                        void openPlayer({
-                          type: "vod",
-                          id: m.stream_id,
-                          name: m.name,
-                          logo: m.stream_icon,
-                        }),
-                      onToggleFavorite: () =>
-                        void toggleFavorite("vod", m.stream_id, m.favorite !== 1),
-                    }))}
-                  />
-                ) : null}
+            {syncing ? (
+              <div className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Sincronizando catálogo...
               </div>
-            ) : view === "live" ? (
+            ) : null}
+
+            {nav === "home" ? (
+              <div className="space-y-10">
+                <HeroCarousel slides={slides} />
+                {homeRows.map((r) => (
+                  <Row
+                    key={r.title}
+                    title={r.title}
+                    actionLabel={r.action ? "Ver tudo" : undefined}
+                    onAction={r.action ? () => setNav(r.action!) : undefined}
+                    items={r.items}
+                  />
+                ))}
+              </div>
+            ) : null}
+
+            {nav === "live" ? (
               <div className="space-y-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <select
-                    value={liveCategoryId}
-                    onChange={(e) => setLiveCategoryId(e.target.value)}
-                    className="h-11 rounded-lg bg-secondary/50 border border-border/40 px-3 text-sm"
-                  >
-                    {liveCategories.map((c) => (
-                      <option key={c.category_id} value={c.category_id}>
-                        {c.category_name}
-                      </option>
-                    ))}
-                  </select>
+                <div className="space-y-2">
                   <Input
                     value={liveQuery}
                     onChange={(e) => setLiveQuery(e.target.value)}
                     placeholder="Buscar canal..."
-                    className="h-11"
                   />
-                  <button
-                    onClick={() => setLiveOnlyFav((p) => !p)}
-                    className={`h-11 rounded-lg px-4 text-sm border transition ${
-                      liveOnlyFav
-                        ? "bg-primary text-primary-foreground border-primary/40"
-                        : "bg-secondary/30 text-muted-foreground border-border/40 hover:bg-secondary/50 hover:text-foreground"
-                    }`}
-                  >
-                    ⭐ Favoritos
-                  </button>
-                </div>
-
-                <div className="rounded-xl border border-border/40 bg-card overflow-hidden">
-                  <div className="max-h-[70vh] overflow-auto divide-y divide-border/40">
-                    {liveStreams.map((s) => (
-                      <div key={s.stream_id} className="flex items-center gap-3 px-4 py-3">
-                        {s.stream_icon ? (
-                          <img
-                            src={s.stream_icon}
-                            alt=""
-                            className="h-10 w-10 rounded-md object-cover"
-                          />
-                        ) : (
-                          <div className="h-10 w-10 rounded-md bg-secondary/40" />
-                        )}
+                  <div className="-mx-4 px-4 overflow-x-auto">
+                    <div className="flex gap-2">
+                      {liveCategories.slice(0, 16).map((c) => (
                         <button
-                          onClick={() =>
-                            void openPlayer({
-                              type: "live",
-                              id: s.stream_id,
-                              name: s.name,
-                              logo: s.stream_icon,
-                            })
+                          key={c.category_id}
+                          onClick={() => setLiveCategory(c.category_id)}
+                          className={
+                            c.category_id === liveCategory
+                              ? "shrink-0 rounded-full bg-primary/15 text-primary px-4 h-10 text-xs font-medium border border-primary/20"
+                              : "shrink-0 rounded-full bg-white/5 text-muted-foreground px-4 h-10 text-xs font-medium border border-border/40 hover:text-foreground hover:bg-white/10 transition"
                           }
-                          className="flex-1 text-left text-sm text-foreground hover:underline"
                         >
-                          {s.name}
+                          {c.category_name}
                         </button>
-                        <button
-                          onClick={() => void toggleFavorite("live", s.stream_id, s.favorite !== 1)}
-                          className="rounded-md p-2 hover:bg-secondary/40 transition"
-                          title="Favoritar"
-                        >
-                          <Star
-                            className={`h-4 w-4 ${s.favorite === 1 ? "text-yellow-400" : "text-muted-foreground"}`}
-                          />
-                        </button>
-                      </div>
-                    ))}
-                    {liveStreams.length === 0 && (
-                      <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                        Nenhum canal encontrado.
-                      </div>
-                    )}
+                      ))}
+                    </div>
                   </div>
                 </div>
+                <div className="space-y-2">
+                  {liveList.slice(0, 80).map((c) => (
+                    <button
+                      key={c.stream_id}
+                      onClick={() => void openLive(c)}
+                      className="w-full rounded-2xl border border-border/40 bg-white/5 px-4 py-3 text-left hover:bg-white/10 transition"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm text-foreground truncate">{c.name}</p>
+                          <p className="text-xs text-muted-foreground">Ao vivo</p>
+                        </div>
+                        <div className="shrink-0 rounded-full bg-primary/90 px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
+                          LIVE
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                  {liveList.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">Nenhum canal encontrado.</div>
+                  ) : null}
+                </div>
               </div>
-            ) : (
+            ) : null}
+
+            {nav === "vod" ? (
               <div className="space-y-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <select
-                    value={vodCategoryId}
-                    onChange={(e) => setVodCategoryId(e.target.value)}
-                    className="h-11 rounded-lg bg-secondary/50 border border-border/40 px-3 text-sm"
-                  >
-                    {vodCategories.map((c) => (
-                      <option key={c.category_id} value={c.category_id}>
-                        {c.category_name}
-                      </option>
-                    ))}
-                  </select>
+                <div className="space-y-2">
                   <Input
                     value={vodQuery}
                     onChange={(e) => setVodQuery(e.target.value)}
                     placeholder="Buscar filme..."
-                    className="h-11"
                   />
-                  <button
-                    onClick={() => setVodOnlyFav((p) => !p)}
-                    className={`h-11 rounded-lg px-4 text-sm border transition ${
-                      vodOnlyFav
-                        ? "bg-primary text-primary-foreground border-primary/40"
-                        : "bg-secondary/30 text-muted-foreground border-border/40 hover:bg-secondary/50 hover:text-foreground"
-                    }`}
-                  >
-                    ⭐ Favoritos
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-                  {vodStreams.map((m) => (
-                    <div
-                      key={m.stream_id}
-                      className="rounded-xl border border-border/40 bg-card overflow-hidden"
-                    >
-                      <button
-                        onClick={() =>
-                          void openPlayer({
-                            type: "vod",
-                            id: m.stream_id,
-                            name: m.name,
-                            logo: m.stream_icon,
-                          })
-                        }
-                        className="block w-full text-left"
-                      >
-                        {m.stream_icon ? (
-                          <img src={m.stream_icon} alt="" className="h-56 w-full object-cover" />
-                        ) : (
-                          <div className="h-56 w-full bg-secondary/40" />
-                        )}
-                        <div className="p-3">
-                          <p className="text-sm text-foreground line-clamp-2">{m.name}</p>
-                        </div>
-                      </button>
-                      <div className="px-3 pb-3 flex justify-end">
+                  <div className="-mx-4 px-4 overflow-x-auto">
+                    <div className="flex gap-2">
+                      {vodCategories.slice(0, 16).map((c) => (
                         <button
-                          onClick={() => void toggleFavorite("vod", m.stream_id, m.favorite !== 1)}
-                          className="rounded-md p-2 hover:bg-secondary/40 transition"
-                          title="Favoritar"
+                          key={c.category_id}
+                          onClick={() => setVodCategory(c.category_id)}
+                          className={
+                            c.category_id === vodCategory
+                              ? "shrink-0 rounded-full bg-primary/15 text-primary px-4 h-10 text-xs font-medium border border-primary/20"
+                              : "shrink-0 rounded-full bg-white/5 text-muted-foreground px-4 h-10 text-xs font-medium border border-border/40 hover:text-foreground hover:bg-white/10 transition"
+                          }
                         >
-                          <Star
-                            className={`h-4 w-4 ${m.favorite === 1 ? "text-yellow-400" : "text-muted-foreground"}`}
-                          />
+                          {c.category_name}
                         </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  {vodList.slice(0, 60).map((m) => (
+                    <button
+                      key={m.stream_id}
+                      onClick={() => void openVod(m)}
+                      className="overflow-hidden rounded-2xl border border-border/40 bg-white/5 text-left hover:bg-white/10 transition"
+                    >
+                      <div className="aspect-[2/3]">
+                        {m.stream_icon ? (
+                          <img src={m.stream_icon} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="h-full w-full bg-secondary/40" />
+                        )}
                       </div>
-                    </div>
+                      <div className="p-2">
+                        <p className="text-xs text-foreground line-clamp-2">{m.name}</p>
+                      </div>
+                    </button>
                   ))}
-                  {vodStreams.length === 0 && (
-                    <div className="col-span-full text-center text-sm text-muted-foreground py-10">
-                      Nenhum filme encontrado.
-                    </div>
-                  )}
+                </div>
+                {vodList.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">Nenhum filme encontrado.</div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {nav === "search" ? (
+              <div className="space-y-4">
+                <Input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Buscar canais e filmes..."
+                />
+                <div className="space-y-6">
+                  {searchResults.live.length > 0 ? (
+                    <Row
+                      title="Canais"
+                      items={searchResults.live.map((c) => ({
+                        key: `sl-${c.stream_id}`,
+                        title: c.name,
+                        image: c.stream_icon,
+                        kind: "live",
+                        favorite: c.favorite === 1,
+                        onPlay: () => void openLive(c),
+                        onToggleFavorite: () =>
+                          void toggleFavorite("live", c.stream_id, c.favorite !== 1),
+                      }))}
+                    />
+                  ) : null}
+                  {searchResults.vod.length > 0 ? (
+                    <Row
+                      title="Filmes"
+                      items={searchResults.vod.map((m) => ({
+                        key: `sv-${m.stream_id}`,
+                        title: m.name,
+                        image: m.stream_icon,
+                        kind: "vod",
+                        favorite: m.favorite === 1,
+                        onPlay: () => void openVod(m),
+                        onToggleFavorite: () =>
+                          void toggleFavorite("vod", m.stream_id, m.favorite !== 1),
+                      }))}
+                    />
+                  ) : null}
+                  {searchQuery.trim() &&
+                  searchResults.live.length === 0 &&
+                  searchResults.vod.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">Nada encontrado.</div>
+                  ) : null}
                 </div>
               </div>
-            )}
+            ) : null}
+
+            {nav === "list" ? (
+              <div className="space-y-8">
+                <Row
+                  title="Filmes salvos"
+                  items={listVod.map((m) => ({
+                    key: `lv-${m.stream_id}`,
+                    title: m.name,
+                    image: m.stream_icon,
+                    kind: "vod",
+                    favorite: m.favorite === 1,
+                    onPlay: () => void openVod(m),
+                    onToggleFavorite: () =>
+                      void toggleFavorite("vod", m.stream_id, m.favorite !== 1),
+                  }))}
+                />
+                <Row
+                  title="Canais salvos"
+                  items={listLive.map((c) => ({
+                    key: `ll-${c.stream_id}`,
+                    title: c.name,
+                    image: c.stream_icon,
+                    kind: "live",
+                    favorite: c.favorite === 1,
+                    onPlay: () => void openLive(c),
+                    onToggleFavorite: () =>
+                      void toggleFavorite("live", c.stream_id, c.favorite !== 1),
+                  }))}
+                />
+                {listLive.length === 0 && listVod.length === 0 ? (
+                  <div className="rounded-3xl border border-border/40 bg-white/5 p-6 text-sm text-muted-foreground">
+                    Você ainda não salvou nada. Toque no ⭐ para adicionar.
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </>
         )}
       </main>
 
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Adicionar conta IPTV</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <Input
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="Nome da conta"
-            />
-            <Input
-              value={newBaseUrl}
-              onChange={(e) => setNewBaseUrl(e.target.value)}
-              placeholder="URL base (ex: https://provedor.com:80)"
-            />
-            <Input
-              value={newUser}
-              onChange={(e) => setNewUser(e.target.value)}
-              placeholder="Usuário"
-            />
-            <Input
-              value={newPass}
-              onChange={(e) => setNewPass(e.target.value)}
-              placeholder="Senha"
-              type="password"
-            />
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => setAddOpen(false)}
-                className="rounded-lg bg-secondary/60 px-4 py-2 text-sm hover:bg-secondary transition min-h-[44px]"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={() => void handleSaveAccount()}
-                disabled={saving}
-                className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground hover:brightness-110 transition min-h-[44px] disabled:opacity-60"
-              >
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Salvar
-              </button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <BottomNav active={nav} onChange={setNav} />
 
-      {player ? (
-        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm">
-          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/60 to-black/10" />
-          <div className="relative h-full w-full">
-            <div className="absolute top-0 left-0 right-0 z-10 px-4 pt-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-xs text-muted-foreground">IPTV</p>
-                  <p className="text-sm text-foreground truncate">{player.name}</p>
-                </div>
-                <button
-                  onClick={() => setPlayer(null)}
-                  className="rounded-full bg-black/50 border border-border/40 p-2 hover:bg-black/60 transition min-h-[44px] min-w-[44px] flex items-center justify-center"
-                  title="Fechar"
-                >
-                  <X className="h-4 w-4 text-foreground" />
-                </button>
-              </div>
-            </div>
+      <AccountDrawer
+        open={accountDrawerOpen}
+        onOpenChange={setAccountDrawerOpen}
+        accounts={accounts}
+        onActivate={(id) => void activateAccount(id)}
+        onAdd={() => {
+          setAccountDrawerOpen(false);
+          setAddDrawerOpen(true);
+        }}
+      />
 
-            <div className="h-full w-full flex flex-col justify-center px-4 pb-6 pt-20">
-              <div className="w-full max-w-5xl mx-auto space-y-4">
-                <div className="relative w-full overflow-hidden rounded-2xl border border-border/40 bg-black">
-                  <div className="aspect-video">
-                    {streamUrl ? (
-                      <video
-                        src={streamUrl}
-                        controls
-                        autoPlay
-                        playsInline
-                        className="h-full w-full"
-                        onLoadStart={() => {
-                          setPlayerLoading(true);
-                          setPlayerError(false);
-                        }}
-                        onCanPlay={() => setPlayerLoading(false)}
-                        onError={() => {
-                          setPlayerLoading(false);
-                          setPlayerError(true);
-                        }}
-                      />
-                    ) : null}
-                  </div>
+      <AddAccountDrawer
+        open={addDrawerOpen}
+        onOpenChange={setAddDrawerOpen}
+        onSave={createAccount}
+      />
 
-                  {playerLoading ? (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Carregando...
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {playerError ? (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/70 p-6 text-center">
-                      <div className="space-y-4 max-w-md">
-                        <p className="text-base text-foreground">
-                          Não foi possível reproduzir no navegador.
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          Tente abrir no VLC (recomendado) ou copie a URL.
-                        </p>
-                        <div className="flex flex-col sm:flex-row gap-2 justify-center">
-                          <a
-                            href={vlcUrl}
-                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-primary-foreground hover:brightness-110 transition min-h-[48px]"
-                          >
-                            Abrir no VLC
-                          </a>
-                          <button
-                            onClick={() => void copyUrl()}
-                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-secondary/50 border border-border/40 px-5 py-3 text-sm text-foreground hover:bg-secondary/70 transition min-h-[48px]"
-                          >
-                            {copied ? (
-                              <Check className="h-4 w-4 text-green-400" />
-                            ) : (
-                              <Copy className="h-4 w-4" />
-                            )}
-                            Copiar URL
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="flex flex-wrap gap-2 justify-between items-center">
-                  <div className="flex gap-2">
-                    <a
-                      href={vlcUrl}
-                      className="inline-flex items-center gap-2 rounded-xl bg-secondary/50 border border-border/40 px-4 py-3 text-sm text-foreground hover:bg-secondary/70 transition min-h-[48px]"
-                    >
-                      Abrir no VLC
-                    </a>
-                    <button
-                      onClick={() => void copyUrl()}
-                      className="inline-flex items-center gap-2 rounded-xl bg-secondary/50 border border-border/40 px-4 py-3 text-sm text-foreground hover:bg-secondary/70 transition min-h-[48px]"
-                    >
-                      {copied ? (
-                        <Check className="h-4 w-4 text-green-400" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
-                      Copiar URL
-                    </button>
-                  </div>
-                  <div className="text-xs text-muted-foreground truncate max-w-full">
-                    {activeAccount ? `${activeAccount.name} • ${activeAccount.baseUrl}` : ""}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <PlayerOverlay item={player} />
     </div>
   );
 }

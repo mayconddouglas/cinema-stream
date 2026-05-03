@@ -44,7 +44,7 @@
 :root {
   --radius: 0.5rem;
 
-  /* Cinema noir palette */
+  /* Netflix red / dark */
   --background: oklch(0.12 0.005 60);
   --foreground: oklch(0.93 0.015 80);
 
@@ -54,8 +54,8 @@
   --popover: oklch(0.14 0.006 60);
   --popover-foreground: oklch(0.93 0.015 80);
 
-  --primary: oklch(0.78 0.16 75);          /* amber gold #F5A623-ish */
-  --primary-foreground: oklch(0.15 0.01 60);
+  --primary: oklch(0.62 0.24 27); /* netflix red */
+  --primary-foreground: oklch(0.98 0 0);
 
   --secondary: oklch(0.22 0.01 60);
   --secondary-foreground: oklch(0.93 0.015 80);
@@ -63,18 +63,18 @@
   --muted: oklch(0.2 0.008 60);
   --muted-foreground: oklch(0.65 0.015 75);
 
-  --accent: oklch(0.78 0.16 75);
-  --accent-foreground: oklch(0.15 0.01 60);
+  --accent: oklch(0.62 0.24 27);
+  --accent-foreground: oklch(0.98 0 0);
 
   --destructive: oklch(0.6 0.22 25);
   --destructive-foreground: oklch(0.98 0 0);
 
   --border: oklch(0.25 0.01 60);
   --input: oklch(0.22 0.01 60);
-  --ring: oklch(0.78 0.16 75);
+  --ring: oklch(0.62 0.24 27);
 
-  --gold: oklch(0.78 0.16 75);
-  --gold-soft: oklch(0.82 0.12 80);
+  --gold: oklch(0.62 0.24 27);
+  --gold-soft: oklch(0.72 0.18 27);
   --cream: oklch(0.93 0.025 85);
 
   --gradient-hero: linear-gradient(
@@ -83,11 +83,7 @@
     oklch(0.12 0.005 60 / 0.6) 60%,
     oklch(0.12 0.005 60) 100%
   );
-  --gradient-card-hover: linear-gradient(
-    180deg,
-    transparent 40%,
-    oklch(0 0 0 / 0.85) 100%
-  );
+  --gradient-card-hover: linear-gradient(180deg, transparent 40%, oklch(0 0 0 / 0.85) 100%);
   --gradient-gold: linear-gradient(135deg, var(--gold) 0%, var(--gold-soft) 100%);
 }
 
@@ -109,16 +105,16 @@
     color: var(--color-foreground);
     font-family: var(--font-sans);
     background-image:
-      radial-gradient(
-        ellipse at top,
-        oklch(0.78 0.16 75 / 0.05),
-        transparent 50%
-      ),
+      radial-gradient(ellipse at top, oklch(0.62 0.24 27 / 0.06), transparent 50%),
       url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
     background-attachment: fixed;
   }
 
-  h1, h2, h3, h4, .display {
+  h1,
+  h2,
+  h3,
+  h4,
+  .display {
     font-family: var(--font-display);
     letter-spacing: 0.02em;
   }
@@ -154,20 +150,37 @@
 }
 
 @keyframes fade-up {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 @keyframes scale-in {
-  from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
-.animate-fade-up { animation: fade-up 0.5s ease-out both; }
-.animate-scale-in { animation: scale-in 0.25s ease-out both; }
+.animate-fade-up {
+  animation: fade-up 0.5s ease-out both;
+}
+.animate-scale-in {
+  animation: scale-in 0.25s ease-out both;
+}
 
 .card-hover {
-  transition: transform 250ms cubic-bezier(0.2, 0.8, 0.2, 1),
-              box-shadow 250ms ease;
+  transition:
+    transform 250ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 250ms ease;
 }
 .card-hover:hover {
   transform: translateY(-4px) scale(1.02);
