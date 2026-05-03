@@ -79,22 +79,24 @@ function dbGetMovieById(id) {
 }
 
 function dbUpsertMovie(movie) {
-  db.prepare(`
-    INSERT INTO movies (id, title, magnet, file_index, poster, backdrop, description, year, tmdb_id, imdb_id, favorite, progress, duration, last_played_at, added_at)
-    VALUES (@id, @title, @magnet, @file_index, @poster, @backdrop, @description, @year, @tmdb_id, @imdb_id, @favorite, @progress, @duration, @last_played_at, @added_at)
-    ON CONFLICT(id) DO UPDATE SET
-      title = excluded.title,
-      magnet = excluded.magnet,
-      file_index = COALESCE(excluded.file_index, file_index),
-      poster = COALESCE(excluded.poster, poster),
-      backdrop = COALESCE(excluded.backdrop, backdrop),
-      description = COALESCE(excluded.description, description),
-      year = COALESCE(excluded.year, year),
-      tmdb_id = COALESCE(excluded.tmdb_id, tmdb_id),
-      imdb_id = COALESCE(excluded.imdb_id, imdb_id),
-      favorite = excluded.favorite,
-      added_at = COALESCE(excluded.added_at, added_at)
-  `).run({
+  db.prepare(
+    `
+      INSERT INTO movies (id, title, magnet, file_index, poster, backdrop, description, year, tmdb_id, imdb_id, favorite, progress, duration, last_played_at, added_at)
+      VALUES (@id, @title, @magnet, @file_index, @poster, @backdrop, @description, @year, @tmdb_id, @imdb_id, @favorite, @progress, @duration, @last_played_at, @added_at)
+      ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title,
+        magnet = excluded.magnet,
+        file_index = COALESCE(excluded.file_index, file_index),
+        poster = COALESCE(excluded.poster, poster),
+        backdrop = COALESCE(excluded.backdrop, backdrop),
+        description = COALESCE(excluded.description, description),
+        year = COALESCE(excluded.year, year),
+        tmdb_id = COALESCE(excluded.tmdb_id, tmdb_id),
+        imdb_id = COALESCE(excluded.imdb_id, imdb_id),
+        favorite = excluded.favorite,
+        added_at = COALESCE(excluded.added_at, added_at)
+    `,
+  ).run({
     id: movie.id,
     title: movie.title,
     magnet: movie.magnet,
@@ -145,17 +147,19 @@ function dbGetAllSeries() {
 }
 
 function dbUpsertSeries(series) {
-  db.prepare(`
-    INSERT INTO series (tmdb_id, title, original_title, overview, year, poster, backdrop, added_at)
-    VALUES (@tmdb_id, @title, @original_title, @overview, @year, @poster, @backdrop, @added_at)
-    ON CONFLICT(tmdb_id) DO UPDATE SET
-      title = excluded.title,
-      original_title = COALESCE(excluded.original_title, original_title),
-      overview = COALESCE(excluded.overview, overview),
-      year = COALESCE(excluded.year, year),
-      poster = COALESCE(excluded.poster, poster),
-      backdrop = COALESCE(excluded.backdrop, backdrop)
-  `).run({
+  db.prepare(
+    `
+      INSERT INTO series (tmdb_id, title, original_title, overview, year, poster, backdrop, added_at)
+      VALUES (@tmdb_id, @title, @original_title, @overview, @year, @poster, @backdrop, @added_at)
+      ON CONFLICT(tmdb_id) DO UPDATE SET
+        title = excluded.title,
+        original_title = COALESCE(excluded.original_title, original_title),
+        overview = COALESCE(excluded.overview, overview),
+        year = COALESCE(excluded.year, year),
+        poster = COALESCE(excluded.poster, poster),
+        backdrop = COALESCE(excluded.backdrop, backdrop)
+    `,
+  ).run({
     tmdb_id: series.tmdbId ?? series.tmdb_id,
     title: series.title,
     original_title: series.originalTitle ?? series.original_title ?? null,
@@ -180,18 +184,20 @@ function dbGetEpisodesByShow(showTmdbId) {
 }
 
 function dbUpsertEpisode(ep) {
-  db.prepare(`
-    INSERT INTO episodes (id, show_tmdb_id, season, episode, name, overview, still, runtime, magnet, file_index, progress, duration, last_played_at, added_at)
-    VALUES (@id, @show_tmdb_id, @season, @episode, @name, @overview, @still, @runtime, @magnet, @file_index, @progress, @duration, @last_played_at, @added_at)
-    ON CONFLICT(id) DO UPDATE SET
-      name = excluded.name,
-      overview = COALESCE(excluded.overview, overview),
-      still = COALESCE(excluded.still, still),
-      runtime = COALESCE(excluded.runtime, runtime),
-      magnet = COALESCE(excluded.magnet, magnet),
-      file_index = COALESCE(excluded.file_index, file_index),
-      added_at = COALESCE(added_at, excluded.added_at)
-  `).run({
+  db.prepare(
+    `
+      INSERT INTO episodes (id, show_tmdb_id, season, episode, name, overview, still, runtime, magnet, file_index, progress, duration, last_played_at, added_at)
+      VALUES (@id, @show_tmdb_id, @season, @episode, @name, @overview, @still, @runtime, @magnet, @file_index, @progress, @duration, @last_played_at, @added_at)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        overview = COALESCE(excluded.overview, overview),
+        still = COALESCE(excluded.still, still),
+        runtime = COALESCE(excluded.runtime, runtime),
+        magnet = COALESCE(excluded.magnet, magnet),
+        file_index = COALESCE(excluded.file_index, file_index),
+        added_at = COALESCE(added_at, excluded.added_at)
+    `,
+  ).run({
     id: ep.id,
     show_tmdb_id: ep.showTmdbId ?? ep.show_tmdb_id,
     season: ep.season,
@@ -731,7 +737,7 @@ const server = http.createServer(async (req, res) => {
       if (method === "POST" && /^\/api\/series\/\d+\/episodes\/bulk$/.test(pathname)) {
         const tmdbId = Number(pathname.split("/")[3]);
         const body = await readBody(req);
-        const episodes = Array.isArray(body) ? body : body.episodes ?? [];
+        const episodes = Array.isArray(body) ? body : (body.episodes ?? []);
         const rows = dbUpsertEpisodesBulk(tmdbId, episodes);
         return json(res, rows.map(episodeToClient), 201);
       }

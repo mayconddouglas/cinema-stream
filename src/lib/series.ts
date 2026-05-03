@@ -1,4 +1,10 @@
-import localforage from "localforage";
+import {
+  apiGetAllSeries,
+  apiGetEpisodes,
+  apiPatchEpisode,
+  apiUpsertEpisodesBulk,
+  apiUpsertSeries,
+} from "@/lib/api";
 
 export type Series = {
   tmdbId: number;
@@ -27,14 +33,6 @@ export type Episode = {
   duration?: number;
   lastPlayedAt?: number;
 };
-
-const store = localforage.createInstance({
-  name: "buffet-video",
-  storeName: "series",
-});
-
-const SERIES_KEY = "series";
-const EPISODES_KEY = "episodes";
 
 export function episodeId(showTmdbId: number, season: number, episode: number) {
   return `${showTmdbId}-s${String(season).padStart(2, "0")}e${String(episode).padStart(2, "0")}`;
@@ -83,46 +81,30 @@ export function parseEpisodeFromName(name: string) {
   return null;
 }
 
-export async function getSeriesAll(): Promise<Series[]> {
-  return ((await store.getItem<Series[]>(SERIES_KEY)) ?? []).filter(
-    (s) => typeof s?.tmdbId === "number",
-  );
-}
-
 export async function upsertSeries(series: Series) {
-  const all = await getSeriesAll();
-  const idx = all.findIndex((s) => s.tmdbId === series.tmdbId);
-  if (idx >= 0) all[idx] = { ...all[idx], ...series };
-  else all.unshift(series);
-  await store.setItem(SERIES_KEY, all);
-  return all;
+  return apiUpsertSeries(series);
 }
 
-export async function getEpisodesAll(): Promise<Episode[]> {
-  return ((await store.getItem<Episode[]>(EPISODES_KEY)) ?? []).filter(
-    (e) => typeof e?.id === "string",
-  );
-}
-
-export async function getEpisodesForShow(showTmdbId: number) {
-  const all = await getEpisodesAll();
-  return all.filter((e) => e.showTmdbId === showTmdbId);
+export async function getSeriesAll() {
+  try {
+    return await apiGetAllSeries();
+  } catch {
+    return [];
+  }
 }
 
 export async function upsertEpisodesBulk(showTmdbId: number, episodes: Episode[]) {
-  const all = await getEpisodesAll();
-  const keep = all.filter((e) => e.showTmdbId !== showTmdbId);
-  const next = [...episodes, ...keep];
-  await store.setItem(EPISODES_KEY, next);
-  return next.filter((e) => e.showTmdbId === showTmdbId);
+  return apiUpsertEpisodesBulk(showTmdbId, episodes);
 }
 
 export async function patchEpisode(id: string, patch: Partial<Episode>) {
-  const all = await getEpisodesAll();
-  const idx = all.findIndex((e) => e.id === id);
-  if (idx >= 0) {
-    all[idx] = { ...all[idx], ...patch };
-    await store.setItem(EPISODES_KEY, all);
+  return apiPatchEpisode(id, patch as Record<string, unknown>);
+}
+
+export async function getEpisodesForShow(showTmdbId: number) {
+  try {
+    return await apiGetEpisodes(showTmdbId);
+  } catch {
+    return [];
   }
-  return all[idx] ?? null;
 }

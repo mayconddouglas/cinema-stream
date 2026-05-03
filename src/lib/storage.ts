@@ -1,4 +1,4 @@
-import localforage from "localforage";
+import { apiDeleteMovie, apiGetAllMovies, apiPatchMovie, apiUpsertMovie } from "@/lib/api";
 
 export type LibraryItem = {
   id: string;
@@ -18,45 +18,27 @@ export type LibraryItem = {
   lastPlayedAt?: number;
 };
 
-const store = localforage.createInstance({
-  name: "buffet-video",
-  storeName: "library",
-});
-
-const KEY = "items";
-
 export async function getAll(): Promise<LibraryItem[]> {
-  const items = (await store.getItem<LibraryItem[]>(KEY)) ?? [];
-  return items;
-}
-
-export async function saveAll(items: LibraryItem[]) {
-  await store.setItem(KEY, items);
-}
-
-export async function upsert(item: LibraryItem) {
-  const items = await getAll();
-  const idx = items.findIndex((i) => i.id === item.id);
-  if (idx >= 0) items[idx] = { ...items[idx], ...item };
-  else items.unshift(item);
-  await saveAll(items);
-  return items;
-}
-
-export async function remove(id: string) {
-  const items = (await getAll()).filter((i) => i.id !== id);
-  await saveAll(items);
-  return items;
-}
-
-export async function update(id: string, patch: Partial<LibraryItem>) {
-  const items = await getAll();
-  const idx = items.findIndex((i) => i.id === id);
-  if (idx >= 0) {
-    items[idx] = { ...items[idx], ...patch };
-    await saveAll(items);
+  try {
+    return await apiGetAllMovies();
+  } catch {
+    return [];
   }
-  return items;
+}
+
+export async function upsert(item: LibraryItem): Promise<LibraryItem[]> {
+  await apiUpsertMovie(item);
+  return getAll();
+}
+
+export async function update(id: string, patch: Partial<LibraryItem>): Promise<LibraryItem[]> {
+  await apiPatchMovie(id, patch as Record<string, unknown>);
+  return getAll();
+}
+
+export async function remove(id: string): Promise<LibraryItem[]> {
+  await apiDeleteMovie(id);
+  return getAll();
 }
 
 export function parseMagnet(magnet: string): { name?: string; infoHash?: string } {
