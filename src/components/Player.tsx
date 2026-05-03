@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { X, Loader2, AlertCircle, Copy, Check } from "lucide-react";
 import type { LibraryItem } from "@/lib/storage";
+import { fetchMetaWithRetry } from "@/lib/torrent";
 import {
   Sheet,
   SheetContent,
@@ -113,6 +114,7 @@ export function Player({
   const [vlcUrl, setVlcUrl] = useState("");
   const [streamUrl, setStreamUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [statusMsg, setStatusMsg] = useState("Preparando link de streaming...");
   const [copied, setCopied] = useState(false);
   const [vlcResumeOpen, setVlcResumeOpen] = useState(false);
   const [vlcResumeMinutes, setVlcResumeMinutes] = useState("");
@@ -128,6 +130,7 @@ export function Player({
         return;
       }
       try {
+        setStatusMsg("Preparando link de streaming...");
         const overrideIndex =
           typeof fileIndex === "number"
             ? fileIndex
@@ -144,16 +147,34 @@ export function Player({
         }
 
         const cached = getCachedMeta(item.magnet);
-        const meta =
-          cached ??
-          (await (async () => {
-            const res = await fetch(`${base}/meta?magnet=${encodeURIComponent(item.magnet)}`);
-            if (!res.ok) throw new Error(`Proxy retornou ${res.status}`);
-            const data = (await res.json()) as ProxyMeta;
-            setCachedMeta(item.magnet, data);
-            return data;
-          })());
-        const bestIndex = typeof meta.bestVideoIndex === "number" ? meta.bestVideoIndex : 0;
+        const meta = cached
+          ? cached
+          : await (async () => {
+              const result = await fetchMetaWithRetry(base, item.magnet, {
+                maxAttempts: 3,
+                onAttempt: (attempt, max) => {
+                  setStatusMsg(
+                    attempt === 1
+                      ? "Preparando link de streaming..."
+                      : `Procurando peers... tentativa ${attempt}/${max}`,
+                  );
+                },
+              });
+
+              if (!result.ok) {
+                throw new Error(result.error);
+              }
+
+              setCachedMeta(item.magnet, result.meta as ProxyMeta);
+              return result.meta as ProxyMeta;
+            })();
+
+        const bestIndex =
+          typeof item.fileIndex === "number"
+            ? item.fileIndex
+            : typeof meta.bestVideoIndex === "number"
+              ? meta.bestVideoIndex
+              : 0;
         const url = `${base}/stream?magnet=${encodeURIComponent(item.magnet)}&index=${bestIndex}`;
         setStreamUrl(url);
         setVlcUrl(getVlcDeepLink(url, item.progress ?? 0));
@@ -231,7 +252,7 @@ export function Player({
         {phase === "resolving" && (
           <div className="flex flex-col items-center gap-3">
             <Loader2 className="h-8 w-8 text-primary animate-spin" />
-            <p className="text-sm text-white/50">Preparando link de streaming...</p>
+            <p className="text-sm text-white/50">{statusMsg}</p>
           </div>
         )}
 

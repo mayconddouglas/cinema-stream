@@ -32,6 +32,14 @@ const DEFAULT_ANNOUNCE = [
   "https://tracker1.520.jp:443/announce",
   "https://tracker.torrent.eu.org:443/announce",
 ];
+const EXTRA_TRACKERS = [
+  "udp://tracker.opentrackr.org:1337/announce",
+  "udp://open.stealth.si:80/announce",
+  "udp://tracker.torrent.eu.org:451/announce",
+  "udp://tracker.openbittorrent.com:6969/announce",
+  "udp://explodie.org:6969/announce",
+  "https://tracker.tamersunion.org:443/announce",
+];
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 
 function getMimeType(filename) {
@@ -737,7 +745,8 @@ const server = http.createServer(async (req, res) => {
 
     let torrent = torrents.get(magnet);
     if (!torrent) {
-      torrent = client.add(magnet, { announce: DEFAULT_ANNOUNCE });
+      const announce = Array.from(new Set([...DEFAULT_ANNOUNCE, ...EXTRA_TRACKERS]));
+      torrent = client.add(magnet, { announce });
       torrent.__lastAccess = Date.now();
       torrents.set(magnet, torrent);
       torrent.on("done", () => {
@@ -748,12 +757,18 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      await waitForReady(
-        torrent,
-        url.pathname === "/stream" || url.pathname === "/stream-audio" ? 90_000 : 25_000,
-      );
+      const readyTimeout =
+        url.pathname === "/stream" || url.pathname === "/stream-audio" || url.pathname === "/meta"
+          ? 90_000
+          : 25_000;
+      await waitForReady(torrent, readyTimeout);
     } catch (e) {
-      sendJson(res, 504, { error: "metadata_timeout" });
+      sendJson(res, 504, {
+        error: "metadata_timeout",
+        message: "Não foi possível obter metadados do torrent a tempo.",
+        retryable: true,
+        suggestImportWithoutMeta: true,
+      });
       return;
     }
 

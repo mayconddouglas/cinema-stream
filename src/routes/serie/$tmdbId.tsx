@@ -4,6 +4,7 @@ import { ArrowLeft, Loader2, Play, Plus, Pencil } from "lucide-react";
 import { Header } from "@/components/Header";
 import { Player } from "@/components/Player";
 import { tmdbTv, tmdbTvSeason, type TmdbTvEpisode } from "@/lib/tmdb";
+import { fetchMetaWithRetry } from "@/lib/torrent";
 import {
   episodeId,
   getEpisodesForShow,
@@ -67,9 +68,16 @@ function SeriesDetailsPage() {
   const [magnet, setMagnet] = useState("");
   const [packPreview, setPackPreview] = useState<PackPreview | null>(null);
   const [packImporting, setPackImporting] = useState(false);
+  const [packProbeAttempt, setPackProbeAttempt] = useState<{ current: number; max: number } | null>(
+    null,
+  );
+  const [packImportWithoutMeta, setPackImportWithoutMeta] = useState(false);
   const [selectedSeasonFilter, setSelectedSeasonFilter] = useState<number | "all">("all");
   const [episodeProbeLoading, setEpisodeProbeLoading] = useState(false);
   const [episodePreview, setEpisodePreview] = useState<DetectedEpisode | null>(null);
+  const [epProbeAttempt, setEpProbeAttempt] = useState<{ current: number; max: number } | null>(
+    null,
+  );
   const [addingMagnetFor, setAddingMagnetFor] = useState<string | null>(null);
   const [episodeMagnet, setEpisodeMagnet] = useState("");
   const [episodeImporting, setEpisodeImporting] = useState(false);
@@ -141,6 +149,9 @@ function SeriesDetailsPage() {
   useEffect(() => {
     setPackPreview(null);
     setMagnet("");
+    setPackImportWithoutMeta(false);
+    setPackProbeAttempt(null);
+    setEpProbeAttempt(null);
     setEpisodePreview(null);
     setAddingMagnetFor(null);
     setEpisodeMagnet("");
@@ -166,6 +177,7 @@ function SeriesDetailsPage() {
     const m = magnetValue.trim();
     if (!base || !m.startsWith("magnet:?")) return;
 
+    setPackImportWithoutMeta(false);
     setPackPreview({
       magnet: m,
       detectedEpisodes: [],
@@ -175,99 +187,75 @@ function SeriesDetailsPage() {
       errorMsg: null,
     });
 
-    try {
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 35_000);
-      const res = await fetch(`${base}/meta?magnet=${encodeURIComponent(m)}`, {
-        signal: ctrl.signal,
-      });
-      clearTimeout(timeout);
+    const result = await fetchMetaWithRetry(base, m, {
+      maxAttempts: 3,
+      onAttempt: (attempt, max) => {
+        setPackProbeAttempt({ current: attempt, max });
+      },
+    });
 
-      if (!res.ok) {
-        let msg = `Proxy retornou ${res.status}.`;
-        try {
-          const body = (await res.json()) as { error?: string };
-          if (body.error === "metadata_timeout") {
-            msg = "Torrent sem peers no momento. Tente novamente em alguns segundos.";
-          }
-          if (body.error === "invalid_magnet") msg = "Magnet inválido.";
-        } catch {
-          void 0;
-        }
-        setPackPreview((p) => (p ? { ...p, status: "error", errorMsg: msg } : null));
-        return;
-      }
+    setPackProbeAttempt(null);
 
-      const meta = (await res.json()) as {
-        files?: { index: number; name: string; length: number; kind: string }[];
-      };
-
-      const VIDEO_RE = /\.(mp4|webm|mkv|m4v|mov|avi|ts|m2ts|mpg|mpeg|wmv|flv)$/i;
-      const videoFiles = (meta.files ?? []).filter(
-        (f) => f.kind === "video" || VIDEO_RE.test(String(f.name ?? "")),
-      );
-
-      const detected: DetectedEpisode[] = [];
-      const unmatched: { fileIndex: number; fileName: string; fileLength: number }[] = [];
-      const seasonSet = new Set<number>();
-
-      for (const f of videoFiles) {
-        const parsed = parseEpisodeFromName(f.name);
-        if (parsed) {
-          seasonSet.add(parsed.season);
-          const tmdbEp =
-            episodes.find((e) => e.episode === parsed.episode && season === parsed.season) ?? null;
-          detected.push({
-            fileIndex: Number(f.index),
-            fileName: String(f.name),
-            fileLength: Number(f.length) || 0,
-            season: parsed.season,
-            episode: parsed.episode,
-            tmdbEp,
-            matched: true,
-          });
-        } else {
-          unmatched.push({
-            fileIndex: Number(f.index),
-            fileName: String(f.name),
-            fileLength: Number(f.length) || 0,
-          });
-        }
-      }
-
-      detected.sort((a, b) => a.season - b.season || a.episode - b.episode);
-      const seasonsFound = Array.from(seasonSet).sort((a, b) => a - b);
-
-      if (seasonsFound.length > 1 && seasonsFound.includes(season)) {
-        setSelectedSeasonFilter(season);
-      } else if (seasonsFound.length === 1) {
-        setSelectedSeasonFilter(seasonsFound[0]);
-      } else {
-        setSelectedSeasonFilter("all");
-      }
-
-      setPackPreview({
-        magnet: m,
-        detectedEpisodes: detected,
-        unmatchedFiles: unmatched,
-        seasons: seasonsFound,
-        status: "ready",
-        errorMsg: null,
-      });
-    } catch (e) {
-      const isAbort = e instanceof Error && e.name === "AbortError";
-      setPackPreview((p) =>
-        p
-          ? {
-              ...p,
-              status: "error",
-              errorMsg: isAbort
-                ? "Análise demorou demais. Tente novamente."
-                : "Falha ao analisar o torrent.",
-            }
-          : null,
-      );
+    if (!result.ok) {
+      if (result.suggestImportWithoutMeta) setPackImportWithoutMeta(true);
+      setPackPreview((p) => (p ? { ...p, status: "error", errorMsg: result.error } : null));
+      return;
     }
+
+    const meta = result.meta;
+
+    const VIDEO_RE = /\.(mp4|webm|mkv|m4v|mov|avi|ts|m2ts|mpg|mpeg|wmv|flv)$/i;
+    const videoFiles = (meta.files ?? []).filter(
+      (f) => f.kind === "video" || VIDEO_RE.test(String(f.name ?? "")),
+    );
+
+    const detected: DetectedEpisode[] = [];
+    const unmatched: { fileIndex: number; fileName: string; fileLength: number }[] = [];
+    const seasonSet = new Set<number>();
+
+    for (const f of videoFiles) {
+      const parsed = parseEpisodeFromName(f.name);
+      if (parsed) {
+        seasonSet.add(parsed.season);
+        const tmdbEp =
+          episodes.find((e) => e.episode === parsed.episode && season === parsed.season) ?? null;
+        detected.push({
+          fileIndex: Number(f.index),
+          fileName: String(f.name),
+          fileLength: Number(f.length) || 0,
+          season: parsed.season,
+          episode: parsed.episode,
+          tmdbEp,
+          matched: true,
+        });
+      } else {
+        unmatched.push({
+          fileIndex: Number(f.index),
+          fileName: String(f.name),
+          fileLength: Number(f.length) || 0,
+        });
+      }
+    }
+
+    detected.sort((a, b) => a.season - b.season || a.episode - b.episode);
+    const seasonsFound = Array.from(seasonSet).sort((a, b) => a - b);
+
+    if (seasonsFound.length > 1 && seasonsFound.includes(season)) {
+      setSelectedSeasonFilter(season);
+    } else if (seasonsFound.length === 1) {
+      setSelectedSeasonFilter(seasonsFound[0]);
+    } else {
+      setSelectedSeasonFilter("all");
+    }
+
+    setPackPreview({
+      magnet: m,
+      detectedEpisodes: detected,
+      unmatchedFiles: unmatched,
+      seasons: seasonsFound,
+      status: "ready",
+      errorMsg: null,
+    });
   };
 
   const confirmImportPack = async () => {
@@ -358,22 +346,21 @@ function SeriesDetailsPage() {
     setEpisodePreview(null);
 
     try {
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 30_000);
-      const res = await fetch(`${base}/meta?magnet=${encodeURIComponent(magnetValue.trim())}`, {
-        signal: ctrl.signal,
+      const result = await fetchMetaWithRetry(base, magnetValue.trim(), {
+        maxAttempts: 2,
+        onAttempt: (attempt, max) => {
+          setEpProbeAttempt({ current: attempt, max });
+        },
       });
-      clearTimeout(timeout);
 
-      if (!res.ok) {
+      setEpProbeAttempt(null);
+
+      if (!result.ok) {
         setEpisodeProbeLoading(false);
         return;
       }
 
-      const meta = (await res.json()) as {
-        bestVideoIndex?: number | null;
-        files?: { index: number; name: string; length: number; kind: string }[];
-      };
+      const meta = result.meta;
 
       const VIDEO_RE = /\.(mp4|webm|mkv|m4v|mov|avi|ts|m2ts|mpg|mpeg|wmv|flv)$/i;
       const videoFiles = (meta.files ?? []).filter(
@@ -450,19 +437,9 @@ function SeriesDetailsPage() {
       });
 
       let bestFileIndex = 0;
-      try {
-        const metaRes = await fetch(`${base}/meta?magnet=${encodeURIComponent(m)}`);
-        if (metaRes.ok) {
-          const meta = (await metaRes.json()) as {
-            bestVideoIndex?: number | null;
-            files?: unknown[];
-          };
-          if (typeof meta.bestVideoIndex === "number") {
-            bestFileIndex = meta.bestVideoIndex;
-          }
-        }
-      } catch {
-        bestFileIndex = 0;
+      const result = await fetchMetaWithRetry(base, m, { maxAttempts: 2 });
+      if (result.ok && typeof result.meta.bestVideoIndex === "number") {
+        bestFileIndex = result.meta.bestVideoIndex;
       }
 
       if (
@@ -587,6 +564,8 @@ function SeriesDetailsPage() {
                   const v = e.target.value;
                   setMagnet(v);
                   setPackPreview(null);
+                  setPackImportWithoutMeta(false);
+                  setPackProbeAttempt(null);
                   setSelectedSeasonFilter("all");
                   setError(null);
                   if (v.trim().startsWith("magnet:?")) {
@@ -629,15 +608,77 @@ function SeriesDetailsPage() {
             </div>
 
             {packPreview && packPreview.status === "loading" && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground py-2 px-1">
-                <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
-                Analisando arquivos do torrent...
+              <div className="flex flex-col gap-1.5 py-2 px-1">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+                  <span>
+                    {packProbeAttempt
+                      ? packProbeAttempt.current === 1
+                        ? "Conectando ao torrent..."
+                        : `Procurando peers... tentativa ${packProbeAttempt.current}/${packProbeAttempt.max}`
+                      : "Analisando arquivos do torrent..."}
+                  </span>
+                </div>
+                {packProbeAttempt && packProbeAttempt.current > 1 && (
+                  <div className="h-1 rounded-full bg-secondary overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-[width] duration-500"
+                      style={{
+                        width: `${((packProbeAttempt.current - 1) / packProbeAttempt.max) * 100}%`,
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
             {packPreview && packPreview.status === "error" && (
               <div className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">
                 {packPreview.errorMsg}
+              </div>
+            )}
+
+            {packImportWithoutMeta && packPreview?.status === "error" && (
+              <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-4 space-y-3 mt-2">
+                <div className="flex items-start gap-3">
+                  <span className="text-yellow-400 text-base shrink-0">⚠</span>
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">
+                      Torrent sem peers disponíveis
+                    </p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      Não foi possível analisar os episódios agora. Você pode salvar o magnet mesmo
+                      assim e configurar os episódios individualmente depois, ou tentar novamente em
+                      alguns minutos.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPackImportWithoutMeta(false);
+                      setPackPreview(null);
+                      void probeSeasonPack(magnet);
+                    }}
+                    className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-secondary py-2.5 text-sm font-medium hover:bg-secondary/80 transition min-h-[44px]"
+                  >
+                    <Loader2 className="h-4 w-4" />
+                    Tentar novamente
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPackImportWithoutMeta(false);
+                      setPackPreview(null);
+                      setMagnet("");
+                      setError(null);
+                    }}
+                    className="flex-1 inline-flex items-center justify-center rounded-lg bg-yellow-500/20 border border-yellow-500/30 py-2.5 text-sm font-medium text-yellow-400 hover:bg-yellow-500/30 transition min-h-[44px]"
+                  >
+                    Ok, entendi
+                  </button>
+                </div>
               </div>
             )}
 

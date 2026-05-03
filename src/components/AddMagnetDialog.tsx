@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Film, Loader2, Plus } from "lucide-react";
 import { parseMagnet, upsert, type LibraryItem } from "@/lib/storage";
 import { tmdbMovie, tmdbSearch, type TmdbSearchItem } from "@/lib/tmdb";
+import { fetchMetaWithRetry } from "@/lib/torrent";
 
 type DetectedFile = {
   index: number;
@@ -60,6 +61,8 @@ export function AddMagnetDialog({
   const [tmdbLoading, setTmdbLoading] = useState(false);
   const [tmdbSelectedId, setTmdbSelectedId] = useState<number | null>(null);
   const [probeLoading, setProbeLoading] = useState(false);
+  const [probeAttempt, setProbeAttempt] = useState<{ current: number; max: number } | null>(null);
+  const [importWithoutMeta, setImportWithoutMeta] = useState(false);
   const [detectedFiles, setDetectedFiles] = useState<DetectedFile[]>([]);
   const [mode, setMode] = useState<"single" | "pack">("single");
   const [singleFileIndex, setSingleFileIndex] = useState<number | null>(null);
@@ -133,38 +136,26 @@ export function AddMagnetDialog({
     setSingleFileIndex(null);
     setSingleFileName("");
     setError(null);
+    setImportWithoutMeta(false);
+    setProbeAttempt(null);
 
     try {
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 35_000);
-      const res = await fetch(`${base}/meta?magnet=${encodeURIComponent(magnetValue.trim())}`, {
-        signal: ctrl.signal,
+      const result = await fetchMetaWithRetry(base, magnetValue.trim(), {
+        maxAttempts: 3,
+        onAttempt: (attempt, max) => {
+          setProbeAttempt({ current: attempt, max });
+        },
       });
-      clearTimeout(timeout);
 
-      if (!res.ok) {
-        try {
-          const body = (await res.json()) as { error?: unknown };
-          const code = typeof body?.error === "string" ? body.error : "";
-          if (code === "metadata_timeout") {
-            setError(
-              "Não foi possível ler os arquivos do torrent (sem peers). Tente novamente em alguns segundos.",
-            );
-          } else if (code === "invalid_magnet") {
-            setError("Magnet inválido.");
-          } else {
-            setError(`Falha ao analisar o torrent (proxy retornou ${res.status}).`);
-          }
-        } catch {
-          setError(`Falha ao analisar o torrent (proxy retornou ${res.status}).`);
-        }
+      setProbeAttempt(null);
+
+      if (!result.ok) {
+        if (result.suggestImportWithoutMeta) setImportWithoutMeta(true);
+        setError(result.error);
         return;
       }
 
-      const meta = (await res.json()) as {
-        bestVideoIndex?: number | null;
-        files?: { index: number; name: string; length: number; kind: string }[];
-      };
+      const meta = result.meta;
 
       const videoFiles = (meta.files ?? [])
         .filter(
@@ -202,10 +193,6 @@ export function AddMagnetDialog({
       videoFiles.forEach((file, i) => {
         void searchTmdbForFile(file.cleanTitle, i);
       });
-    } catch (e) {
-      if (e instanceof Error && e.name === "AbortError") {
-        setError("Análise do torrent demorou demais. Tente novamente.");
-      }
     } finally {
       setProbeLoading(false);
     }
@@ -217,6 +204,8 @@ export function AddMagnetDialog({
     setDetectedFiles([]);
     setSingleFileIndex(null);
     setSingleFileName("");
+    setImportWithoutMeta(false);
+    setProbeAttempt(null);
     const parsed = parseMagnet(v);
     if (parsed.name && !title) setTitle(parsed.name);
     if (v.trim().startsWith("magnet:?")) {
@@ -323,6 +312,8 @@ export function AddMagnetDialog({
     setTmdbSelectedId(null);
     setSingleFileIndex(null);
     setSingleFileName("");
+    setImportWithoutMeta(false);
+    setProbeAttempt(null);
     onClose();
   };
 
@@ -364,9 +355,27 @@ export function AddMagnetDialog({
         </Field>
 
         {probeLoading && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-            Analisando torrent...
+          <div className="flex flex-col gap-1.5 py-2">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+              <span>
+                {probeAttempt
+                  ? probeAttempt.current === 1
+                    ? "Conectando ao torrent..."
+                    : `Procurando peers... tentativa ${probeAttempt.current}/${probeAttempt.max}`
+                  : "Analisando torrent..."}
+              </span>
+            </div>
+            {probeAttempt && probeAttempt.current > 1 && (
+              <div className="h-1 rounded-full bg-secondary overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-[width] duration-500"
+                  style={{
+                    width: `${((probeAttempt.current - 1) / probeAttempt.max) * 100}%`,
+                  }}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -528,6 +537,35 @@ export function AddMagnetDialog({
 
         {error && (
           <p className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">{error}</p>
+        )}
+
+        {importWithoutMeta && !probeLoading && (
+          <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-4 space-y-3">
+            <div className="flex items-start gap-3">
+              <span className="text-yellow-400 text-base shrink-0">⚠</span>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">
+                  Não foi possível analisar os arquivos do torrent
+                </p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  O torrent não tem peers disponíveis no momento. Você pode importar o filme mesmo
+                  assim — o sistema vai resolver os arquivos automaticamente quando você for
+                  assistir.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setImportWithoutMeta(false);
+                setError(null);
+                setMode("single");
+              }}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-yellow-500/20 border border-yellow-500/30 py-2.5 text-sm font-medium text-yellow-400 hover:bg-yellow-500/30 transition min-h-[44px]"
+            >
+              Importar sem análise de arquivos
+            </button>
+          </div>
         )}
 
         <div className="flex justify-end gap-2 pt-2">
