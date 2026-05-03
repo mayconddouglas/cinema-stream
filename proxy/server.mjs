@@ -1,6 +1,287 @@
 import http from "node:http";
 import { execFile, spawn } from "node:child_process";
+import fs from "node:fs";
 import WebTorrent from "webtorrent";
+import Database from "better-sqlite3";
+
+const API_SECRET = process.env.API_SECRET ?? "";
+
+const DATA_DIR = process.env.DATA_DIR ?? "/data";
+try {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+} catch {
+  void 0;
+}
+
+const db = new Database(`${DATA_DIR}/library.db`);
+db.pragma("journal_mode = WAL");
+db.pragma("foreign_keys = ON");
+db.exec(`
+  CREATE TABLE IF NOT EXISTS movies (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    magnet TEXT NOT NULL,
+    file_index INTEGER,
+    poster TEXT,
+    backdrop TEXT,
+    description TEXT,
+    year TEXT,
+    tmdb_id INTEGER,
+    imdb_id TEXT,
+    favorite INTEGER DEFAULT 0,
+    progress REAL DEFAULT 0,
+    duration REAL DEFAULT 0,
+    last_played_at INTEGER DEFAULT 0,
+    added_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS series (
+    tmdb_id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    original_title TEXT,
+    overview TEXT,
+    year TEXT,
+    poster TEXT,
+    backdrop TEXT,
+    added_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS episodes (
+    id TEXT PRIMARY KEY,
+    show_tmdb_id INTEGER NOT NULL,
+    season INTEGER NOT NULL,
+    episode INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    overview TEXT,
+    still TEXT,
+    runtime INTEGER,
+    magnet TEXT,
+    file_index INTEGER,
+    progress REAL DEFAULT 0,
+    duration REAL DEFAULT 0,
+    last_played_at INTEGER DEFAULT 0,
+    added_at INTEGER NOT NULL,
+    FOREIGN KEY (show_tmdb_id) REFERENCES series(tmdb_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_episodes_show ON episodes(show_tmdb_id);
+  CREATE INDEX IF NOT EXISTS idx_movies_added ON movies(added_at DESC);
+`);
+
+// ── MOVIES ──────────────────────────────────────────
+
+function dbGetAllMovies() {
+  return db.prepare("SELECT * FROM movies ORDER BY added_at DESC").all();
+}
+
+function dbGetMovieById(id) {
+  return db.prepare("SELECT * FROM movies WHERE id = ?").get(id) ?? null;
+}
+
+function dbUpsertMovie(movie) {
+  db.prepare(`
+    INSERT INTO movies (id, title, magnet, file_index, poster, backdrop, description, year, tmdb_id, imdb_id, favorite, progress, duration, last_played_at, added_at)
+    VALUES (@id, @title, @magnet, @file_index, @poster, @backdrop, @description, @year, @tmdb_id, @imdb_id, @favorite, @progress, @duration, @last_played_at, @added_at)
+    ON CONFLICT(id) DO UPDATE SET
+      title = excluded.title,
+      magnet = excluded.magnet,
+      file_index = COALESCE(excluded.file_index, file_index),
+      poster = COALESCE(excluded.poster, poster),
+      backdrop = COALESCE(excluded.backdrop, backdrop),
+      description = COALESCE(excluded.description, description),
+      year = COALESCE(excluded.year, year),
+      tmdb_id = COALESCE(excluded.tmdb_id, tmdb_id),
+      imdb_id = COALESCE(excluded.imdb_id, imdb_id),
+      favorite = excluded.favorite,
+      added_at = COALESCE(excluded.added_at, added_at)
+  `).run({
+    id: movie.id,
+    title: movie.title,
+    magnet: movie.magnet,
+    file_index: movie.fileIndex ?? movie.file_index ?? null,
+    poster: movie.poster ?? null,
+    backdrop: movie.backdrop ?? null,
+    description: movie.description ?? null,
+    year: movie.year ?? null,
+    tmdb_id: movie.tmdbId ?? movie.tmdb_id ?? null,
+    imdb_id: movie.imdbId ?? movie.imdb_id ?? null,
+    favorite: movie.favorite ? 1 : 0,
+    progress: movie.progress ?? 0,
+    duration: movie.duration ?? 0,
+    last_played_at: movie.lastPlayedAt ?? movie.last_played_at ?? 0,
+    added_at: movie.addedAt ?? movie.added_at ?? Date.now(),
+  });
+  return dbGetMovieById(movie.id);
+}
+
+function dbPatchMovie(id, patch) {
+  const allowed = [
+    "title",
+    "poster",
+    "backdrop",
+    "description",
+    "year",
+    "favorite",
+    "progress",
+    "duration",
+    "last_played_at",
+    "file_index",
+  ];
+  const fields = Object.keys(patch).filter((k) => allowed.includes(k));
+  if (fields.length === 0) return dbGetMovieById(id);
+  const sets = fields.map((f) => `${f} = @${f}`).join(", ");
+  db.prepare(`UPDATE movies SET ${sets} WHERE id = @id`).run({ ...patch, id });
+  return dbGetMovieById(id);
+}
+
+function dbDeleteMovie(id) {
+  db.prepare("DELETE FROM movies WHERE id = ?").run(id);
+}
+
+// ── SERIES ──────────────────────────────────────────
+
+function dbGetAllSeries() {
+  return db.prepare("SELECT * FROM series ORDER BY added_at DESC").all();
+}
+
+function dbUpsertSeries(series) {
+  db.prepare(`
+    INSERT INTO series (tmdb_id, title, original_title, overview, year, poster, backdrop, added_at)
+    VALUES (@tmdb_id, @title, @original_title, @overview, @year, @poster, @backdrop, @added_at)
+    ON CONFLICT(tmdb_id) DO UPDATE SET
+      title = excluded.title,
+      original_title = COALESCE(excluded.original_title, original_title),
+      overview = COALESCE(excluded.overview, overview),
+      year = COALESCE(excluded.year, year),
+      poster = COALESCE(excluded.poster, poster),
+      backdrop = COALESCE(excluded.backdrop, backdrop)
+  `).run({
+    tmdb_id: series.tmdbId ?? series.tmdb_id,
+    title: series.title,
+    original_title: series.originalTitle ?? series.original_title ?? null,
+    overview: series.overview ?? null,
+    year: series.year ?? null,
+    poster: series.poster ?? null,
+    backdrop: series.backdrop ?? null,
+    added_at: series.addedAt ?? series.added_at ?? Date.now(),
+  });
+}
+
+function dbGetSeriesById(tmdbId) {
+  return db.prepare("SELECT * FROM series WHERE tmdb_id = ?").get(tmdbId) ?? null;
+}
+
+// ── EPISODES ────────────────────────────────────────
+
+function dbGetEpisodesByShow(showTmdbId) {
+  return db
+    .prepare("SELECT * FROM episodes WHERE show_tmdb_id = ? ORDER BY season, episode")
+    .all(showTmdbId);
+}
+
+function dbUpsertEpisode(ep) {
+  db.prepare(`
+    INSERT INTO episodes (id, show_tmdb_id, season, episode, name, overview, still, runtime, magnet, file_index, progress, duration, last_played_at, added_at)
+    VALUES (@id, @show_tmdb_id, @season, @episode, @name, @overview, @still, @runtime, @magnet, @file_index, @progress, @duration, @last_played_at, @added_at)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      overview = COALESCE(excluded.overview, overview),
+      still = COALESCE(excluded.still, still),
+      runtime = COALESCE(excluded.runtime, runtime),
+      magnet = COALESCE(excluded.magnet, magnet),
+      file_index = COALESCE(excluded.file_index, file_index),
+      added_at = COALESCE(added_at, excluded.added_at)
+  `).run({
+    id: ep.id,
+    show_tmdb_id: ep.showTmdbId ?? ep.show_tmdb_id,
+    season: ep.season,
+    episode: ep.episode,
+    name: ep.name,
+    overview: ep.overview ?? null,
+    still: ep.still ?? null,
+    runtime: ep.runtime ?? null,
+    magnet: ep.magnet ?? null,
+    file_index: ep.fileIndex ?? ep.file_index ?? null,
+    progress: ep.progress ?? 0,
+    duration: ep.duration ?? 0,
+    last_played_at: ep.lastPlayedAt ?? ep.last_played_at ?? 0,
+    added_at: ep.addedAt ?? ep.added_at ?? Date.now(),
+  });
+}
+
+function dbUpsertEpisodesBulk(showTmdbId, episodes) {
+  const upsertMany = db.transaction((eps) => {
+    for (const ep of eps) dbUpsertEpisode(ep);
+  });
+  upsertMany(episodes);
+  return dbGetEpisodesByShow(showTmdbId);
+}
+
+function dbPatchEpisode(id, patch) {
+  const allowed = ["progress", "duration", "last_played_at", "magnet", "file_index", "name"];
+  const fields = Object.keys(patch).filter((k) => allowed.includes(k));
+  if (fields.length === 0) return null;
+  const sets = fields.map((f) => `${f} = @${f}`).join(", ");
+  db.prepare(`UPDATE episodes SET ${sets} WHERE id = @id`).run({ ...patch, id });
+  return db.prepare("SELECT * FROM episodes WHERE id = ?").get(id) ?? null;
+}
+
+// ── HELPER: converter snake_case do DB para camelCase do frontend ──
+
+function movieToClient(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    title: row.title,
+    magnet: row.magnet,
+    fileIndex: row.file_index ?? undefined,
+    poster: row.poster ?? undefined,
+    backdrop: row.backdrop ?? undefined,
+    description: row.description ?? undefined,
+    year: row.year ?? undefined,
+    tmdbId: row.tmdb_id ?? undefined,
+    imdbId: row.imdb_id ?? undefined,
+    favorite: row.favorite === 1,
+    progress: row.progress ?? 0,
+    duration: row.duration ?? 0,
+    lastPlayedAt: row.last_played_at ?? 0,
+    addedAt: row.added_at,
+  };
+}
+
+function episodeToClient(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    showTmdbId: row.show_tmdb_id,
+    season: row.season,
+    episode: row.episode,
+    name: row.name,
+    overview: row.overview ?? null,
+    still: row.still ?? null,
+    runtime: row.runtime ?? null,
+    magnet: row.magnet ?? null,
+    fileIndex: row.file_index ?? null,
+    progress: row.progress ?? 0,
+    duration: row.duration ?? 0,
+    lastPlayedAt: row.last_played_at ?? 0,
+    addedAt: row.added_at,
+  };
+}
+
+function seriesToClient(row) {
+  if (!row) return null;
+  return {
+    tmdbId: row.tmdb_id,
+    title: row.title,
+    originalTitle: row.original_title ?? null,
+    overview: row.overview ?? null,
+    year: row.year ?? null,
+    poster: row.poster ?? null,
+    backdrop: row.backdrop ?? null,
+    addedAt: row.added_at,
+  };
+}
 
 let FFMPEG_AVAILABLE = false;
 
@@ -180,6 +461,34 @@ function sendJson(res, status, obj) {
   res.end(body);
 }
 
+function json(res, data, status = 200) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  });
+  res.end(body);
+}
+
+async function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => {
+      data += chunk;
+    });
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(data));
+      } catch {
+        resolve({});
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
 async function tmdbFetch(pathname, params) {
   const apiKey = process.env.TMDB_API_KEY || "";
   if (!apiKey) {
@@ -332,7 +641,22 @@ const port = Number(process.env.PORT || 8787);
 
 const server = http.createServer(async (req, res) => {
   try {
-    if (req.method === "OPTIONS") {
+    const method = req.method || "GET";
+    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const pathname = url.pathname;
+
+    if (method === "OPTIONS") {
+      if (pathname.startsWith("/api/")) {
+        res.writeHead(204, {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400",
+        });
+        res.end();
+        return;
+      }
+
       res.writeHead(204, {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
@@ -344,46 +668,139 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname.startsWith("/api/")) {
+      if (["POST", "PATCH", "DELETE"].includes(method)) {
+        const auth = req.headers["authorization"] ?? "";
+        const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+        if (API_SECRET && token !== API_SECRET) {
+          return json(res, { error: "unauthorized" }, 401);
+        }
+      }
+
+      if (method === "GET" && pathname === "/api/movies") {
+        return json(res, dbGetAllMovies().map(movieToClient));
+      }
+
+      if (method === "POST" && pathname === "/api/movies") {
+        const body = await readBody(req);
+        if (!body.id || !body.title || !body.magnet) {
+          return json(res, { error: "missing_fields" }, 400);
+        }
+        const row = dbUpsertMovie(body);
+        return json(res, movieToClient(row), 201);
+      }
+
+      if (method === "PATCH" && /^\/api\/movies\/[^/]+$/.test(pathname)) {
+        const id = pathname.split("/")[3];
+        const body = await readBody(req);
+        const patch = {};
+        if (body.progress !== undefined) patch.progress = body.progress;
+        if (body.duration !== undefined) patch.duration = body.duration;
+        if (body.lastPlayedAt !== undefined) patch.last_played_at = body.lastPlayedAt;
+        if (body.favorite !== undefined) patch.favorite = body.favorite ? 1 : 0;
+        if (body.title !== undefined) patch.title = body.title;
+        if (body.fileIndex !== undefined) patch.file_index = body.fileIndex;
+        const row = dbPatchMovie(id, patch);
+        if (!row) return json(res, { error: "not_found" }, 404);
+        return json(res, movieToClient(row));
+      }
+
+      if (method === "DELETE" && /^\/api\/movies\/[^/]+$/.test(pathname)) {
+        const id = pathname.split("/")[3];
+        dbDeleteMovie(id);
+        return json(res, { ok: true });
+      }
+
+      if (method === "GET" && pathname === "/api/series") {
+        return json(res, dbGetAllSeries().map(seriesToClient));
+      }
+
+      if (method === "POST" && pathname === "/api/series") {
+        const body = await readBody(req);
+        if (!body.tmdbId && !body.tmdb_id) return json(res, { error: "missing_tmdb_id" }, 400);
+        dbUpsertSeries(body);
+        const row = dbGetSeriesById(body.tmdbId ?? body.tmdb_id);
+        return json(res, seriesToClient(row), 201);
+      }
+
+      if (method === "GET" && /^\/api\/series\/\d+\/episodes$/.test(pathname)) {
+        const tmdbId = Number(pathname.split("/")[3]);
+        return json(res, dbGetEpisodesByShow(tmdbId).map(episodeToClient));
+      }
+
+      if (method === "POST" && /^\/api\/series\/\d+\/episodes\/bulk$/.test(pathname)) {
+        const tmdbId = Number(pathname.split("/")[3]);
+        const body = await readBody(req);
+        const episodes = Array.isArray(body) ? body : body.episodes ?? [];
+        const rows = dbUpsertEpisodesBulk(tmdbId, episodes);
+        return json(res, rows.map(episodeToClient), 201);
+      }
+
+      if (method === "PATCH" && /^\/api\/episodes\/[^/]+$/.test(pathname)) {
+        const id = decodeURIComponent(pathname.split("/").slice(3).join("/"));
+        const body = await readBody(req);
+        const patch = {};
+        if (body.progress !== undefined) patch.progress = body.progress;
+        if (body.duration !== undefined) patch.duration = body.duration;
+        if (body.lastPlayedAt !== undefined) patch.last_played_at = body.lastPlayedAt;
+        if (body.magnet !== undefined) patch.magnet = body.magnet;
+        if (body.fileIndex !== undefined) patch.file_index = body.fileIndex;
+        const row = dbPatchEpisode(id, patch);
+        if (!row) return json(res, { error: "not_found" }, 404);
+        return json(res, episodeToClient(row));
+      }
+
+      if (method === "GET" && pathname === "/api/library") {
+        const movies = dbGetAllMovies().map(movieToClient);
+        const series = dbGetAllSeries().map(seriesToClient);
+        const allEpisodes = series.flatMap((s) =>
+          dbGetEpisodesByShow(s.tmdbId).map(episodeToClient),
+        );
+        return json(res, { movies, series, episodes: allEpisodes });
+      }
+
+      return json(res, { error: "not_found" }, 404);
+    }
+
     setCors(res);
-    const isHead = req.method === "HEAD";
-    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-    if (req.method !== "GET" && req.method !== "HEAD") {
+    const isHead = method === "HEAD";
+    if (method !== "GET" && method !== "HEAD") {
       sendJson(res, 405, { error: "method_not_allowed" });
       return;
     }
 
-    if (url.pathname === "/health") {
+    if (pathname === "/health") {
       sendJson(res, 200, { ok: true, ffmpegAvailable: FFMPEG_AVAILABLE });
       return;
     }
 
     if (
-      url.pathname !== "/stream" &&
-      url.pathname !== "/stream-audio" &&
-      url.pathname !== "/meta" &&
-      url.pathname !== "/file" &&
-      url.pathname !== "/probe" &&
-      url.pathname !== "/extract-audio" &&
-      url.pathname !== "/extract-subtitle" &&
-      url.pathname !== "/tmdb/search" &&
-      url.pathname !== "/tmdb/movie" &&
-      url.pathname !== "/tmdb/trending" &&
-      url.pathname !== "/tmdb/popular" &&
-      url.pathname !== "/tmdb/tv/search" &&
-      url.pathname !== "/tmdb/tv" &&
-      url.pathname !== "/tmdb/tv/season" &&
-      url.pathname !== "/tmdb/trending/tv" &&
-      url.pathname !== "/tmdb/popular/tv"
+      pathname !== "/stream" &&
+      pathname !== "/stream-audio" &&
+      pathname !== "/meta" &&
+      pathname !== "/file" &&
+      pathname !== "/probe" &&
+      pathname !== "/extract-audio" &&
+      pathname !== "/extract-subtitle" &&
+      pathname !== "/tmdb/search" &&
+      pathname !== "/tmdb/movie" &&
+      pathname !== "/tmdb/trending" &&
+      pathname !== "/tmdb/popular" &&
+      pathname !== "/tmdb/tv/search" &&
+      pathname !== "/tmdb/tv" &&
+      pathname !== "/tmdb/tv/season" &&
+      pathname !== "/tmdb/trending/tv" &&
+      pathname !== "/tmdb/popular/tv"
     ) {
       sendJson(res, 404, { error: "not_found" });
       return;
     }
 
-    if (url.pathname.startsWith("/tmdb/")) {
+    if (pathname.startsWith("/tmdb/")) {
       try {
         res.setHeader("cache-control", "no-store");
 
-        if (url.pathname === "/tmdb/search") {
+        if (pathname === "/tmdb/search") {
           const query = url.searchParams.get("query") || "";
           const year = url.searchParams.get("year") || "";
           const language = url.searchParams.get("language") || "pt-BR";
