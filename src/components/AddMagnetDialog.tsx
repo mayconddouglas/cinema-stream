@@ -68,6 +68,8 @@ export function AddMagnetDialog({
 
   if (!open) return null;
 
+  const VIDEO_FILE_RE = /\.(mp4|webm|mkv|m4v|mov|avi|ogv|ogg|ts|m2ts|mpg|mpeg|wmv|flv)$/i;
+
   const searchTmdbForFile = async (query: string, fileArrayIndex: number) => {
     setDetectedFiles((prev) =>
       prev.map((f, i) => (i === fileArrayIndex ? { ...f, tmdbLoading: true } : f)),
@@ -118,23 +120,56 @@ export function AddMagnetDialog({
 
   const probeAndDetect = async (magnetValue: string) => {
     const base = getProxyBase();
-    if (!base || !magnetValue.trim().startsWith("magnet:?")) return;
+    if (!base) {
+      setError("Proxy não configurado. Verifique VITE_TORRENT_PROXY_URL na Vercel.");
+      return;
+    }
+    if (!magnetValue.trim().startsWith("magnet:?")) return;
 
     setProbeLoading(true);
     setDetectedFiles([]);
     setSelectedFiles(new Set());
     setMode("single");
+    setError(null);
 
     try {
-      const res = await fetch(`${base}/meta?magnet=${encodeURIComponent(magnetValue.trim())}`);
-      if (!res.ok) return;
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 35_000);
+      const res = await fetch(`${base}/meta?magnet=${encodeURIComponent(magnetValue.trim())}`, {
+        signal: ctrl.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        try {
+          const body = (await res.json()) as { error?: unknown };
+          const code = typeof body?.error === "string" ? body.error : "";
+          if (code === "metadata_timeout") {
+            setError(
+              "Não foi possível ler os arquivos do torrent (sem peers). Tente novamente em alguns segundos.",
+            );
+          } else if (code === "invalid_magnet") {
+            setError("Magnet inválido.");
+          } else {
+            setError(`Falha ao analisar o torrent (proxy retornou ${res.status}).`);
+          }
+        } catch {
+          setError(`Falha ao analisar o torrent (proxy retornou ${res.status}).`);
+        }
+        return;
+      }
+
       const meta = (await res.json()) as {
         bestVideoIndex?: number | null;
         files?: { index: number; name: string; length: number; kind: string }[];
       };
 
       const videoFiles = (meta.files ?? [])
-        .filter((f) => f.kind === "video" && typeof f.name === "string")
+        .filter(
+          (f) =>
+            typeof f.name === "string" &&
+            (f.kind === "video" || VIDEO_FILE_RE.test(String(f.name))),
+        )
         .map((f) => {
           const cleanTitle = cleanTitleFromFilename(String(f.name));
           return {
@@ -166,8 +201,10 @@ export function AddMagnetDialog({
       videoFiles.forEach((file, i) => {
         void searchTmdbForFile(file.cleanTitle, i);
       });
-    } catch {
-      void 0;
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") {
+        setError("Análise do torrent demorou demais. Tente novamente.");
+      }
     } finally {
       setProbeLoading(false);
     }

@@ -21,7 +21,7 @@ async function checkFfmpeg() {
 
 void checkFfmpeg();
 
-const VIDEO_RE = /\.(mp4|webm|mkv|m4v|mov|avi|ogv|ogg)$/i;
+const VIDEO_RE = /\.(mp4|webm|mkv|m4v|mov|avi|ogv|ogg|ts|m2ts|mpg|mpeg|wmv|flv)$/i;
 const NATIVE_PLAYABLE_RE = /\.(mp4|webm|ogv|ogg|m4v)$/i;
 const SUB_RE = /\.(vtt|srt|ass|ssa)$/i;
 const DEFAULT_ANNOUNCE = [
@@ -43,6 +43,11 @@ function getMimeType(filename) {
     mov: "video/quicktime",
     wmv: "video/x-ms-wmv",
     webm: "video/webm",
+    ts: "video/mp2t",
+    m2ts: "video/mp2t",
+    mpg: "video/mpeg",
+    mpeg: "video/mpeg",
+    flv: "video/x-flv",
     mp3: "audio/mpeg",
     aac: "audio/aac",
     flac: "audio/flac",
