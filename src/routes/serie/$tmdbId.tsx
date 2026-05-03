@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Loader2, Play, Plus } from "lucide-react";
+import { ArrowLeft, Loader2, Play, Plus, Pencil } from "lucide-react";
 import { Header } from "@/components/Header";
 import { Player } from "@/components/Player";
 import { tmdbTv, tmdbTvSeason, type TmdbTvEpisode } from "@/lib/tmdb";
@@ -15,7 +15,7 @@ import {
 } from "@/lib/series";
 
 type ProxyMetaFile = { index: number; name: string; kind: string };
-type ProxyMeta = { files: ProxyMetaFile[] };
+type ProxyMeta = { bestVideoIndex: number | null; files: ProxyMetaFile[] };
 
 export const Route = createFileRoute("/serie/$tmdbId")({
   loader: async ({ params }) => {
@@ -49,6 +49,9 @@ function SeriesDetailsPage() {
   const [error, setError] = useState<string | null>(null);
   const [magnet, setMagnet] = useState("");
   const [importing, setImporting] = useState(false);
+  const [addingMagnetFor, setAddingMagnetFor] = useState<string | null>(null);
+  const [episodeMagnet, setEpisodeMagnet] = useState("");
+  const [episodeImporting, setEpisodeImporting] = useState(false);
   const [playing, setPlaying] = useState<{
     id: string;
     title: string;
@@ -62,6 +65,17 @@ function SeriesDetailsPage() {
   useEffect(() => {
     getEpisodesForShow(show.id).then(setLocalEpisodes);
   }, [show.id]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setAddingMagnetFor(null);
+        setEpisodeMagnet("");
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -90,6 +104,10 @@ function SeriesDetailsPage() {
     for (const e of localEpisodes) map.set(e.id, e);
     return map;
   }, [localEpisodes]);
+
+  const configuredCount = useMemo(() => {
+    return localEpisodes.filter((e) => e.season === season && !!e.magnet).length;
+  }, [localEpisodes, season]);
 
   const goBack = () => {
     navigate({ to: "/" });
@@ -176,6 +194,88 @@ function SeriesDetailsPage() {
     }
   };
 
+  const importSingleEpisodeMagnet = async (
+    id: string,
+    seasonNum: number,
+    episodeNum: number,
+    tmdbEp: TmdbTvEpisode,
+  ) => {
+    const base = getProxyBase();
+    const m = episodeMagnet.trim();
+    if (!base) {
+      setError("Proxy não configurado.");
+      return;
+    }
+    if (!m.startsWith("magnet:?")) {
+      setError("Magnet inválido.");
+      return;
+    }
+
+    setEpisodeImporting(true);
+    setError(null);
+
+    try {
+      await upsertSeries({
+        tmdbId: show.id,
+        title: show.title,
+        originalTitle: show.originalTitle,
+        overview: show.overview,
+        year: show.year,
+        poster: show.poster,
+        backdrop: show.backdrop,
+        addedAt: Date.now(),
+      });
+
+      let bestFileIndex = 0;
+      try {
+        const metaRes = await fetch(`${base}/meta?magnet=${encodeURIComponent(m)}`);
+        if (metaRes.ok) {
+          const meta = (await metaRes.json()) as {
+            bestVideoIndex?: number | null;
+            files?: unknown[];
+          };
+          if (typeof meta.bestVideoIndex === "number") {
+            bestFileIndex = meta.bestVideoIndex;
+          }
+        }
+      } catch {
+        bestFileIndex = 0;
+      }
+
+      const existing = localByKey.get(id);
+      const entry: Episode = {
+        id,
+        showTmdbId: show.id,
+        season: seasonNum,
+        episode: episodeNum,
+        name: tmdbEp.name || `S${pad2(seasonNum)}E${pad2(episodeNum)}`,
+        overview: tmdbEp.overview ?? null,
+        still: tmdbEp.still ?? null,
+        runtime: tmdbEp.runtime ?? null,
+        magnet: m,
+        fileIndex: bestFileIndex,
+        addedAt: existing?.addedAt ?? Date.now(),
+        progress: existing?.progress ?? 0,
+        duration: existing?.duration ?? 0,
+        lastPlayedAt: existing?.lastPlayedAt ?? 0,
+      };
+
+      const allLocal = [...localEpisodes];
+      const idx = allLocal.findIndex((x) => x.id === id);
+      if (idx >= 0) allLocal[idx] = { ...allLocal[idx], ...entry };
+      else allLocal.push(entry);
+
+      const saved = await upsertEpisodesBulk(show.id, allLocal);
+      setLocalEpisodes(saved);
+      setAddingMagnetFor(null);
+      setEpisodeMagnet("");
+    } catch {
+      setError("Falha ao salvar o episódio. Verifique o magnet e tente novamente.");
+    } finally {
+      setEpisodeImporting(false);
+    }
+  };
+
   const handleProgress = async (id: string, patch: Partial<Episode>) => {
     const updated = await patchEpisode(id, patch);
     if (!updated) return;
@@ -246,12 +346,12 @@ function SeriesDetailsPage() {
             </select>
           </div>
           <div className="space-y-1.5 md:col-span-2">
-            <div className="text-xs text-muted-foreground">Adicionar temporada (1 magnet)</div>
+            <div className="text-xs text-muted-foreground">Importar season pack (opcional)</div>
             <div className="flex gap-2">
               <input
                 value={magnet}
                 onChange={(e) => setMagnet(e.target.value)}
-                placeholder="Cole o magnet da temporada completa..."
+                placeholder="Season pack (opcional) — magnet com todos os episódios da temporada"
                 className="flex-1 rounded-md bg-background/60 border border-border/40 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
               <button
@@ -277,7 +377,16 @@ function SeriesDetailsPage() {
         )}
 
         <section className="space-y-3">
-          <h2 className="font-display text-3xl text-cream">Episódios</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-3xl text-cream">Episódios</h2>
+            {episodes.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {configuredCount}
+                {" / "}
+                {episodes.length} configurados
+              </span>
+            )}
+          </div>
 
           {loading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -286,10 +395,20 @@ function SeriesDetailsPage() {
             </div>
           ) : (
             <div className="grid gap-3">
+              {episodes.length > 0 && configuredCount === 0 && (
+                <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground flex items-start gap-3">
+                  <span className="text-primary text-base shrink-0">💡</span>
+                  <span>
+                    Clique em <strong className="text-foreground">"Adicionar magnet"</strong> em
+                    cada episódio para configurá-lo individualmente, ou cole um season pack no campo
+                    acima para importar a temporada inteira de uma vez.
+                  </span>
+                </div>
+              )}
               {episodes.map((ep) => {
                 const id = episodeId(show.id, season, ep.episode);
                 const local = localByKey.get(id) ?? null;
-                const canPlay = !!local?.magnet && typeof local?.fileIndex === "number";
+                const canPlay = !!local?.magnet;
                 const pct =
                   local?.progress && local?.duration
                     ? Math.min(100, Math.round((local.progress / local.duration) * 100))
@@ -301,7 +420,16 @@ function SeriesDetailsPage() {
                     className="rounded-lg bg-card/60 backdrop-blur border border-border/40 overflow-hidden"
                   >
                     <div className="grid md:grid-cols-[240px_1fr] gap-0">
-                      <div className="aspect-video md:aspect-auto md:h-full bg-secondary">
+                      <div className="relative aspect-video md:aspect-auto md:h-full bg-secondary">
+                        {canPlay ? (
+                          <div className="absolute top-2 left-2 bg-green-500/90 text-white text-[10px] rounded-full px-2 py-0.5 font-medium">
+                            ✓ Configurado
+                          </div>
+                        ) : (
+                          <div className="absolute top-2 left-2 bg-black/60 text-white/50 text-[10px] rounded-full px-2 py-0.5">
+                            Sem magnet
+                          </div>
+                        )}
                         {ep.still ? (
                           <img
                             src={ep.still}
@@ -321,25 +449,42 @@ function SeriesDetailsPage() {
                               {ep.name || "Episódio"}
                             </div>
                           </div>
-                          <button
-                            onClick={() => {
-                              if (!canPlay || !local) return;
-                              setPlaying({
-                                id: local.id,
-                                title: `${show.title} — S${pad2(local.season)}E${pad2(local.episode)}`,
-                                magnet: local.magnet!,
-                                description: ep.overview ?? undefined,
-                                poster: ep.still ?? undefined,
-                                year: show.year ?? undefined,
-                                fileIndex: local.fileIndex ?? null,
-                              });
-                            }}
-                            disabled={!canPlay}
-                            className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 transition disabled:opacity-40"
-                          >
-                            <Play className="h-4 w-4 fill-current" />
-                            {pct > 0 && pct < 95 ? "Continuar" : "Assistir"}
-                          </button>
+                          <div className="flex items-center gap-2">
+                            {canPlay && (
+                              <button
+                                onClick={() => {
+                                  setAddingMagnetFor(id);
+                                  setEpisodeMagnet(local?.magnet ?? "");
+                                }}
+                                className="rounded-md bg-secondary/60 px-2 py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground transition min-h-[40px] min-w-[40px] flex items-center justify-center"
+                                title="Editar magnet"
+                                aria-label="Editar magnet"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                if (!canPlay || !local) return;
+                                setPlaying({
+                                  id: local.id,
+                                  title: `${show.title} — S${pad2(local.season)}E${pad2(
+                                    local.episode,
+                                  )}`,
+                                  magnet: local.magnet!,
+                                  description: ep.overview ?? undefined,
+                                  poster: ep.still ?? undefined,
+                                  year: show.year ?? undefined,
+                                  fileIndex: local.fileIndex ?? null,
+                                });
+                              }}
+                              disabled={!canPlay}
+                              className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 transition disabled:opacity-40 min-h-[40px]"
+                            >
+                              <Play className="h-4 w-4 fill-current" />
+                              {pct > 0 && pct < 95 ? "Continuar" : "Assistir"}
+                            </button>
+                          </div>
                         </div>
 
                         {ep.overview && (
@@ -355,13 +500,58 @@ function SeriesDetailsPage() {
                         )}
 
                         {!canPlay && (
-                          <div className="text-xs text-muted-foreground">
-                            Magnet não configurado para este episódio. Use “Importar” com o magnet
-                            da temporada completa.
-                          </div>
+                          <button
+                            onClick={() => {
+                              setAddingMagnetFor(id);
+                              setEpisodeMagnet("");
+                            }}
+                            className="inline-flex items-center gap-2 rounded-md bg-secondary/60 px-3 py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground transition min-h-[40px]"
+                          >
+                            <Plus className="h-4 w-4" />
+                            Adicionar magnet
+                          </button>
                         )}
                       </div>
                     </div>
+
+                    {addingMagnetFor === id && (
+                      <div className="border-t border-border/40 px-4 py-3 bg-black/20 flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <input
+                          autoFocus
+                          value={episodeMagnet}
+                          onChange={(e) => setEpisodeMagnet(e.target.value)}
+                          placeholder="magnet:?xt=urn:btih:... (magnet deste episódio)"
+                          className="flex-1 rounded-md bg-background/60 border border-border/40 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono"
+                        />
+                        <div className="flex gap-2 shrink-0">
+                          <button
+                            onClick={() => {
+                              setAddingMagnetFor(null);
+                              setEpisodeMagnet("");
+                            }}
+                            className="rounded-md bg-secondary px-3 py-2 text-sm hover:bg-secondary/80 transition min-h-[40px]"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            onClick={() =>
+                              importSingleEpisodeMagnet(id, ep.season ?? season, ep.episode, ep)
+                            }
+                            disabled={
+                              episodeImporting || !episodeMagnet.trim().startsWith("magnet:?")
+                            }
+                            className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 transition disabled:opacity-50 min-h-[40px]"
+                          >
+                            {episodeImporting ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Plus className="h-4 w-4" />
+                            )}
+                            Salvar
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
