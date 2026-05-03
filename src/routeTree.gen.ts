@@ -9,38 +9,75 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as BuscarRouteImport } from './routes/buscar'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SerieTmdbIdRouteImport } from './routes/serie/$tmdbId'
+import { Route as FilmeTmdbIdRouteImport } from './routes/filme/$tmdbId'
 
+const BuscarRoute = BuscarRouteImport.update({
+  id: '/buscar',
+  path: '/buscar',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SerieTmdbIdRoute = SerieTmdbIdRouteImport.update({
+  id: '/serie/$tmdbId',
+  path: '/serie/$tmdbId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FilmeTmdbIdRoute = FilmeTmdbIdRouteImport.update({
+  id: '/filme/$tmdbId',
+  path: '/filme/$tmdbId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/buscar': typeof BuscarRoute
+  '/filme/$tmdbId': typeof FilmeTmdbIdRoute
+  '/serie/$tmdbId': typeof SerieTmdbIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/buscar': typeof BuscarRoute
+  '/filme/$tmdbId': typeof FilmeTmdbIdRoute
+  '/serie/$tmdbId': typeof SerieTmdbIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/buscar': typeof BuscarRoute
+  '/filme/$tmdbId': typeof FilmeTmdbIdRoute
+  '/serie/$tmdbId': typeof SerieTmdbIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/buscar' | '/filme/$tmdbId' | '/serie/$tmdbId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/buscar' | '/filme/$tmdbId' | '/serie/$tmdbId'
+  id: '__root__' | '/' | '/buscar' | '/filme/$tmdbId' | '/serie/$tmdbId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BuscarRoute: typeof BuscarRoute
+  FilmeTmdbIdRoute: typeof FilmeTmdbIdRoute
+  SerieTmdbIdRoute: typeof SerieTmdbIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/buscar': {
+      id: '/buscar'
+      path: '/buscar'
+      fullPath: '/buscar'
+      preLoaderRoute: typeof BuscarRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -48,11 +85,28 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/serie/$tmdbId': {
+      id: '/serie/$tmdbId'
+      path: '/serie/$tmdbId'
+      fullPath: '/serie/$tmdbId'
+      preLoaderRoute: typeof SerieTmdbIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/filme/$tmdbId': {
+      id: '/filme/$tmdbId'
+      path: '/filme/$tmdbId'
+      fullPath: '/filme/$tmdbId'
+      preLoaderRoute: typeof FilmeTmdbIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BuscarRoute: BuscarRoute,
+  FilmeTmdbIdRoute: FilmeTmdbIdRoute,
+  SerieTmdbIdRoute: SerieTmdbIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

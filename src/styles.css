@@ -1,7 +1,8 @@
 @import "tailwindcss" source(none);
 @source "../src";
 @import "tw-animate-css";
-@import "plyr/dist/plyr.css";
+@import "@vidstack/react/player/styles/default/theme.css";
+@import "@vidstack/react/player/styles/default/layouts/video.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -146,14 +147,22 @@
   }
 }
 
-/* Plyr theming */
-.plyr {
-  --plyr-color-main: var(--gold);
-  --plyr-video-background: #000;
-  --plyr-menu-background: oklch(0.14 0.006 60);
-  --plyr-menu-color: oklch(0.93 0.015 80);
+.vds-player {
+  --media-brand: oklch(0.78 0.16 75);
+  --media-focus-ring-color: oklch(0.78 0.16 75);
+  --media-controls-bg: linear-gradient(to top, oklch(0 0 0 / 0.85), transparent);
+  --media-menu-bg: oklch(0.16 0.008 60);
+  --media-menu-border: oklch(0.25 0.01 60);
+  --media-tooltip-bg: oklch(0.16 0.008 60);
+  --media-slider-track-bg: oklch(0.25 0.01 60);
   border-radius: var(--radius-lg);
   overflow: hidden;
+}
+
+.vds-menu-button,
+.vds-menu-item {
+  color: oklch(0.93 0.015 80);
+  font-family: var(--font-sans);
 }
 
 ::cue {

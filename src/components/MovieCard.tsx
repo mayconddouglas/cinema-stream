@@ -33,7 +33,7 @@ export function MovieCard({
           alt={item.title}
           loading="lazy"
           className="absolute inset-0 h-full w-full object-cover"
-          onError={(e) => ((e.currentTarget.style.display = "none"))}
+          onError={(e) => (e.currentTarget.style.display = "none")}
         />
       ) : (
         <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-secondary to-card">
@@ -54,9 +54,7 @@ export function MovieCard({
           className="rounded-full bg-black/60 backdrop-blur p-2 hover:bg-primary hover:text-primary-foreground transition"
           aria-label="Favoritar"
         >
-          <Heart
-            className={`h-4 w-4 ${item.favorite ? "fill-primary text-primary" : ""}`}
-          />
+          <Heart className={`h-4 w-4 ${item.favorite ? "fill-primary text-primary" : ""}`} />
         </button>
         <button
           onClick={(e) => {
@@ -72,20 +70,13 @@ export function MovieCard({
 
       {/* Bottom info */}
       <div className="absolute inset-x-0 bottom-0 p-4 space-y-2">
-        <h3 className="font-display text-xl leading-tight line-clamp-2 text-cream">
-          {item.title}
-        </h3>
-        {item.year && (
-          <p className="text-xs text-muted-foreground tracking-wider">{item.year}</p>
-        )}
+        <h3 className="font-display text-xl leading-tight line-clamp-2 text-cream">{item.title}</h3>
+        {item.year && <p className="text-xs text-muted-foreground tracking-wider">{item.year}</p>}
 
         {progressPct > 0 && progressPct < 95 && (
           <div className="space-y-1">
             <div className="h-1 rounded-full bg-white/20 overflow-hidden">
-              <div
-                className="h-full bg-primary"
-                style={{ width: `${progressPct}%` }}
-              />
+              <div className="h-full bg-primary" style={{ width: `${progressPct}%` }} />
             </div>
             <p className="text-[10px] text-muted-foreground">Assistido {progressPct}%</p>
           </div>

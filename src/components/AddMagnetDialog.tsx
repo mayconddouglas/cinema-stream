@@ -45,8 +45,8 @@ export function AddMagnetDialog({
       const results = await tmdbSearch(q, year.trim() || undefined, "pt-BR");
       setTmdbResults(results);
       if (results.length === 0) setError("Nenhum resultado encontrado no TMDB.");
-    } catch (e: any) {
-      const msg = e?.message || "Falha ao buscar no TMDB.";
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Falha ao buscar no TMDB.";
       if (msg === "tmdb_not_configured") {
         setError("TMDB não configurado no servidor. Configure TMDB_API_KEY na Railway (proxy).");
       } else if (msg === "proxy_not_configured") {
@@ -123,8 +123,8 @@ export function AddMagnetDialog({
         <div>
           <h2 className="font-display text-3xl text-primary">Adicionar à biblioteca</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Cole um magnet link de conteúdo do qual você tem direito (vídeos próprios,
-            domínio público, Creative Commons, screeners autorizados).
+            Cole um magnet link de conteúdo do qual você tem direito (vídeos próprios, domínio
+            público, Creative Commons, screeners autorizados).
           </p>
         </div>
 
@@ -161,7 +161,9 @@ export function AddMagnetDialog({
 
         <div className="rounded-lg border border-border/40 bg-secondary/30 p-3 space-y-2">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-xs uppercase tracking-wider text-muted-foreground">Buscar no TMDB</div>
+            <div className="text-xs uppercase tracking-wider text-muted-foreground">
+              Buscar no TMDB
+            </div>
             <button
               type="button"
               onClick={searchOnTmdb}
@@ -194,7 +196,8 @@ export function AddMagnetDialog({
                   </div>
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-foreground line-clamp-1">
-                      {r.title} {r.year ? <span className="text-muted-foreground">({r.year})</span> : null}
+                      {r.title}{" "}
+                      {r.year ? <span className="text-muted-foreground">({r.year})</span> : null}
                     </div>
                     {r.overview && (
                       <div className="text-xs text-muted-foreground line-clamp-2">{r.overview}</div>
