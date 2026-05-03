@@ -107,14 +107,17 @@ function HomePage() {
     return rows;
   }, [items]);
 
-  const handlePlay = useCallback((item: LibraryItem) => {
-    toast.message("Abrindo no VLC...");
-    openVlcWithAuth({
-      magnet: item.magnet,
-      fileIndex: item.fileIndex,
-      startSeconds: item.progress ?? 0,
-    });
-  }, [openVlcWithAuth]);
+  const handlePlay = useCallback(
+    (item: LibraryItem) => {
+      toast.message("Abrindo no VLC...");
+      openVlcWithAuth({
+        magnet: item.magnet,
+        fileIndex: item.fileIndex,
+        startSeconds: item.progress ?? 0,
+      });
+    },
+    [openVlcWithAuth],
+  );
   const handleOpen = useCallback(
     (item: LibraryItem) => {
       if (typeof item.tmdbId === "number" && item.tmdbId > 0) {

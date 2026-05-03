@@ -17,4 +17,3 @@ export const supabase =
         auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true },
       })
     : null;
-

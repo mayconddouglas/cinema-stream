@@ -10,7 +10,11 @@ type AuthContextValue = {
   session: Session | null;
   isAllowed: boolean;
   requireAuth: (action: () => void | Promise<void>) => void;
-  openVlcWithAuth: (opts: { magnet: string; fileIndex?: number | null; startSeconds?: number }) => void;
+  openVlcWithAuth: (opts: {
+    magnet: string;
+    fileIndex?: number | null;
+    startSeconds?: number;
+  }) => void;
   signOut: () => Promise<void>;
 };
 
@@ -74,7 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     checkAllow(user).then(async (ok) => {
       setIsAllowed(ok);
       if (!ok) {
-        toast.error("Acesso não aprovado.");
+        toast.error("Acesso não aprovado (email não está na lista).");
         await supabase.auth.signOut();
       }
     });
@@ -102,7 +106,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const requireAuth = useCallback(
     (action: () => void | Promise<void>) => {
-      if (supabase && user && isAllowed) {
+      if (!supabase) {
+        toast.error("Supabase não configurado.");
+        return;
+      }
+      if (user && isAllowed) {
         void action();
         return;
       }
