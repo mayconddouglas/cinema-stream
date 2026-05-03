@@ -97,6 +97,7 @@ function formatTime(seconds: number): string {
 
 export function Player({
   item,
+  fileIndex,
   onClose,
   onProgress,
 }: {
@@ -127,6 +128,21 @@ export function Player({
         return;
       }
       try {
+        const overrideIndex =
+          typeof fileIndex === "number"
+            ? fileIndex
+            : typeof item.fileIndex === "number"
+              ? item.fileIndex
+              : null;
+
+        if (overrideIndex !== null) {
+          const url = `${base}/stream?magnet=${encodeURIComponent(item.magnet)}&index=${overrideIndex}`;
+          setStreamUrl(url);
+          setVlcUrl(getVlcDeepLink(url, item.progress ?? 0));
+          setPhase("ready");
+          return;
+        }
+
         const cached = getCachedMeta(item.magnet);
         const meta =
           cached ??
@@ -148,7 +164,7 @@ export function Player({
       }
     };
     void resolve();
-  }, [item.id, item.magnet, item.progress]);
+  }, [fileIndex, item.fileIndex, item.id, item.magnet, item.progress]);
 
   const handleClose = () => {
     if (phase === "ready" && vlcUrl) {

@@ -14,6 +14,7 @@ export type LibraryItem = {
   favorite?: boolean;
   progress?: number; // seconds
   duration?: number; // seconds
+  fileIndex?: number;
   lastPlayedAt?: number;
 };
 
