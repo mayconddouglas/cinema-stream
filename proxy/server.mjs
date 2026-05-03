@@ -182,11 +182,11 @@ async function tmdbFetch(pathname, params) {
 }
 
 function setCors(res) {
-  res.setHeader("access-control-allow-origin", "*");
-  res.setHeader("access-control-allow-methods", "GET,OPTIONS");
-  res.setHeader("access-control-allow-headers", "range,content-type");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Range, Content-Type");
   res.setHeader(
-    "access-control-expose-headers",
+    "Access-Control-Expose-Headers",
     "accept-ranges,content-range,content-length,content-type",
   );
 }
@@ -310,8 +310,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const isHead = req.method === "HEAD";
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-    if (req.method !== "GET") {
+    if (req.method !== "GET" && req.method !== "HEAD") {
       sendJson(res, 405, { error: "method_not_allowed" });
       return;
     }
@@ -1028,6 +1029,11 @@ const server = http.createServer(async (req, res) => {
       res.setHeader("content-type", getContentType(file.name));
       res.setHeader("content-length", String(total));
 
+      if (isHead) {
+        res.end();
+        return;
+      }
+
       const stream = file.createReadStream();
       stream.on("error", () => {
         try {
@@ -1061,6 +1067,11 @@ const server = http.createServer(async (req, res) => {
       res.setHeader("cache-control", "no-cache");
       res.setHeader("content-type", "audio/mp4");
       res.setHeader("transfer-encoding", "chunked");
+
+      if (isHead) {
+        res.end();
+        return;
+      }
 
       const fileStream = file.createReadStream();
       const proc = spawn(
@@ -1143,6 +1154,11 @@ const server = http.createServer(async (req, res) => {
       res.setHeader("cache-control", "no-cache");
       res.setHeader("x-transmuxed", "true");
 
+      if (isHead) {
+        res.end();
+        return;
+      }
+
       const fileStream = file.createReadStream();
       const proc = spawn(
         "ffmpeg",
@@ -1218,6 +1234,11 @@ const server = http.createServer(async (req, res) => {
     } else {
       res.statusCode = 200;
       res.setHeader("content-length", String(total));
+    }
+
+    if (isHead) {
+      res.end();
+      return;
     }
 
     const stream = file.createReadStream({ start, end });

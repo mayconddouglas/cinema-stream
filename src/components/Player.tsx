@@ -63,6 +63,25 @@ function getMagnetHash(magnet: string) {
   return infoHash ? infoHash.slice(0, 40) : "";
 }
 
+function getProxyBase() {
+  const env = (import.meta as unknown as { env?: { VITE_TORRENT_PROXY_URL?: string } }).env;
+  const proxyBase = env?.VITE_TORRENT_PROXY_URL;
+  return typeof proxyBase === "string" ? proxyBase.trim().replace(/\/+$/, "") : "";
+}
+
+function generateVlcUrl(streamUrl: string): string {
+  return streamUrl.replace(/^https?:\/\//, "vlc://");
+}
+
+function getVlcDeepLink(streamUrl: string): string {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const isAndroid = /android/i.test(ua);
+  if (isAndroid) {
+    return `intent:${streamUrl}#Intent;package=org.videolan.vlc;action=android.intent.action.VIEW;type=video/*;end`;
+  }
+  return generateVlcUrl(streamUrl);
+}
+
 function getCachedMeta(magnet: string) {
   const hash = getMagnetHash(magnet);
   if (!hash) return null;
@@ -249,6 +268,7 @@ export function Player({
   const [preplayActive, setPreplayActive] = useState(false);
   const [preplayBuffered, setPreplayBuffered] = useState(0);
   const [videoSrc, setVideoSrc] = useState<string>("");
+  const [vlcUrl, setVlcUrl] = useState<string>("");
   const [isTransmuxed, setIsTransmuxed] = useState(false);
   const [audioTracks, setAudioTracks] = useState<StreamAudioOption[]>([]);
   const [audioChoice, setAudioChoice] = useState("native");
@@ -260,6 +280,16 @@ export function Player({
     downloaded: 0,
     length: 0,
   });
+
+  useEffect(() => {
+    const base = getProxyBase();
+    if (!base) {
+      setVlcUrl("");
+      return;
+    }
+    const streamUrl = `${base}/stream?magnet=${encodeURIComponent(item.magnet)}&index=0`;
+    setVlcUrl(getVlcDeepLink(streamUrl));
+  }, [item.magnet]);
 
   useEffect(() => {
     qualityChoiceRef.current = qualityChoice;
@@ -337,9 +367,7 @@ export function Player({
           clientRef.current = null;
           torrentRef.current = null;
 
-          const env = (import.meta as unknown as { env?: { VITE_TORRENT_PROXY_URL?: string } }).env;
-          const proxyBase = env?.VITE_TORRENT_PROXY_URL;
-          const base = typeof proxyBase === "string" ? proxyBase.trim().replace(/\/+$/, "") : "";
+          const base = getProxyBase();
           if (!base) {
             setPhase("error");
             setError(
@@ -393,7 +421,9 @@ export function Player({
             if (playIntentRef.current !== "auto") {
               playIntentRef.current = paused ? "none" : "auto";
             }
-            setVideoSrc(`${base}/stream?magnet=${encodeURIComponent(item.magnet)}&index=${index}`);
+            const streamUrl = `${base}/stream?magnet=${encodeURIComponent(item.magnet)}&index=${index}`;
+            setVlcUrl(getVlcDeepLink(streamUrl));
+            setVideoSrc(streamUrl);
           };
           proxySwitchRef.current = switchProxyVideo;
 
@@ -432,6 +462,9 @@ export function Player({
                   return meta;
                 })());
               if (!meta) return;
+              const bestIndex = typeof meta.bestVideoIndex === "number" ? meta.bestVideoIndex : 0;
+              const bestStreamUrl = `${base}/stream?magnet=${encodeURIComponent(item.magnet)}&index=${bestIndex}`;
+              if (!destroyed) setVlcUrl(getVlcDeepLink(bestStreamUrl));
               const files = Array.isArray(meta?.files) ? meta.files : [];
               const videos = files
                 .filter((f) => f.kind === "video")
@@ -1428,13 +1461,31 @@ export function Player({
           </h2>
           {item.year && <p className="text-xs text-muted-foreground">{item.year}</p>}
         </div>
-        <button
-          onClick={onClose}
-          className="rounded-full bg-card/80 backdrop-blur p-2.5 hover:bg-destructive hover:text-destructive-foreground transition min-h-[44px] min-w-[44px] flex items-center justify-center"
-          aria-label="Fechar"
-        >
-          <X className="h-5 w-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          {vlcUrl && (
+            <a
+              href={vlcUrl}
+              className="inline-flex items-center gap-2 rounded-full bg-card/80 backdrop-blur px-3 py-2 text-xs font-medium text-cream hover:bg-primary/20 hover:text-primary transition border border-border/40 min-h-[44px]"
+              title="Abrir no VLC"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4 fill-primary"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path d="M12 2L2 19.5h20L12 2zm0 3.5l7.5 13H4.5L12 5.5z" />
+              </svg>
+              <span className="hidden sm:inline">Abrir no VLC</span>
+            </a>
+          )}
+          <button
+            onClick={onClose}
+            className="rounded-full bg-card/80 backdrop-blur p-2.5 hover:bg-destructive hover:text-destructive-foreground transition min-h-[44px] min-w-[44px] flex items-center justify-center"
+            aria-label="Fechar"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
       </div>
 
       <div className="w-full max-w-6xl">
@@ -1481,6 +1532,26 @@ export function Player({
                     Usar servidor proxy
                   </button>
                 )}
+                {(phase === "connecting" || phase === "buffering") &&
+                  sourceMode === "proxy" &&
+                  vlcUrl && (
+                    <div className="mt-4 flex flex-col items-center gap-2 pointer-events-auto">
+                      <p className="text-xs text-muted-foreground">Ou abra diretamente no VLC:</p>
+                      <a
+                        href={vlcUrl}
+                        className="inline-flex items-center gap-2 rounded-md bg-primary/90 px-4 py-2.5 text-sm font-medium text-primary-foreground hover:brightness-110 transition min-h-[44px]"
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-4 w-4 fill-current"
+                          xmlns="http://www.w3.org/2000/svg"
+                        >
+                          <path d="M12 2L2 19.5h20L12 2zm0 3.5l7.5 13H4.5L12 5.5z" />
+                        </svg>
+                        Abrir no VLC
+                      </a>
+                    </div>
+                  )}
               </div>
             </div>
           )}
