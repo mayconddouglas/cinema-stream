@@ -1,10 +1,11 @@
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ExternalLink, Play } from "lucide-react";
-import { Header } from "@/components/Header";
+import { ArrowLeft, ExternalLink, Loader2, Tv } from "lucide-react";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
-import { usePremiumPlayer } from "@/components/PremiumPlayerProvider";
+import { AppBottomNav } from "@/components/AppBottomNav";
+import { Button } from "@/components/ui/button";
 import { getAll, type LibraryItem } from "@/lib/storage";
+import { openVlcFromMagnet } from "@/lib/vlc";
 import { tmdbMovie, type TmdbSearchItem } from "@/lib/tmdb";
 
 type Tab = "about" | "cast" | "similar";
@@ -24,7 +25,8 @@ function MovieDetailsPage() {
   const [tab, setTab] = useState<Tab>("about");
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [showAdd, setShowAdd] = useState(false);
-  const { openPlayer } = usePremiumPlayer();
+  const [openingVlc, setOpeningVlc] = useState(false);
+  const [vlcError, setVlcError] = useState<string | null>(null);
 
   useEffect(() => {
     getAll().then(setItems);
@@ -53,12 +55,43 @@ function MovieDetailsPage() {
     navigate({ to: "/" });
   };
 
+  const openVlc = async () => {
+    if (!inLibrary) return;
+    setOpeningVlc(true);
+    setVlcError(null);
+    try {
+      await openVlcFromMagnet({
+        magnet: inLibrary.magnet,
+        fileIndex: inLibrary.fileIndex,
+        startSeconds: inLibrary.progress ?? 0,
+      });
+    } catch {
+      setVlcError("Não foi possível abrir no VLC. Verifique o proxy e o magnet.");
+    } finally {
+      setOpeningVlc(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen">
-      <Header onAdd={() => setShowAdd(true)} />
+    <div className="min-h-screen pb-[92px]">
+      <div className="sticky top-0 z-30 border-b border-border/40 bg-background/70 backdrop-blur-xl">
+        <div className="mx-auto max-w-xl px-4 py-4 flex items-center justify-between gap-3">
+          <button
+            onClick={goBack}
+            className="rounded-2xl border border-border/40 bg-white/5 px-3 py-2 hover:bg-white/10 transition min-h-[44px] inline-flex items-center gap-2"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span className="text-xs">Voltar</span>
+          </button>
+          <div className="min-w-0 text-right">
+            <p className="text-[10px] text-muted-foreground leading-none">Acervos de</p>
+            <p className="text-xs text-foreground truncate">Filmes</p>
+          </div>
+        </div>
+      </div>
 
       <section className="relative overflow-hidden border-b border-border/40">
-        <div className="relative h-[55vh] min-h-[420px]">
+        <div className="relative h-[62vh] min-h-[460px]">
           {backdrop ? (
             <>
               <img
@@ -73,19 +106,9 @@ function MovieDetailsPage() {
             <div className="absolute inset-0 bg-gradient-to-br from-secondary to-black" />
           )}
 
-          <div className="container mx-auto h-full flex items-end px-6 pb-12 relative">
-            <div className="max-w-3xl space-y-4 animate-fade-up">
-              <button
-                onClick={goBack}
-                className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                Voltar
-              </button>
-
-              <h1 className="font-display text-5xl md:text-7xl leading-none text-cream">
-                {data.title}
-              </h1>
+          <div className="mx-auto max-w-xl h-full flex items-end px-4 pb-10 relative">
+            <div className="space-y-4 animate-fade-up w-full">
+              <h1 className="font-display text-5xl leading-[0.92] text-foreground">{data.title}</h1>
 
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 {year && <span>{year}</span>}
@@ -100,52 +123,64 @@ function MovieDetailsPage() {
                 ))}
               </div>
 
-              {data.overview && (
-                <p className="text-base text-muted-foreground line-clamp-3 max-w-2xl">
-                  {data.overview}
-                </p>
-              )}
+              <p className="text-sm text-muted-foreground line-clamp-3">
+                {data.overview || "Sem descrição disponível."}
+              </p>
 
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={() => inLibrary && openPlayer(inLibrary)}
-                  disabled={!inLibrary}
-                  className="inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-glow hover:brightness-110 transition disabled:opacity-50"
+              <div className="space-y-3">
+                <Button
+                  onClick={() => void openVlc()}
+                  disabled={!inLibrary || openingVlc}
+                  size="lg"
+                  className="w-full rounded-2xl h-14 bg-orange-500 text-black hover:bg-orange-400"
                 >
-                  <Play className="h-4 w-4 fill-current" />
-                  {inLibrary?.progress && inLibrary?.duration ? "Continuar" : "Assistir"}
-                </button>
+                  {openingVlc ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Tv className="h-4 w-4" />
+                  )}
+                  Abrir no VLC (Recomendado)
+                </Button>
 
-                <button
+                <Button
+                  variant="secondary"
                   onClick={() => setShowAdd(true)}
-                  className="inline-flex items-center gap-2 rounded-md bg-secondary px-6 py-3 text-sm font-medium text-foreground hover:bg-secondary/80 transition"
+                  size="lg"
+                  className="w-full rounded-2xl h-12"
                 >
                   + Adicionar magnet
-                </button>
+                </Button>
 
-                {data.trailer && data.trailer.site === "YouTube" && (
-                  <button
+                {data.trailer && data.trailer.site === "YouTube" ? (
+                  <Button
                     onClick={openTrailer}
-                    className="inline-flex items-center gap-2 rounded-md border border-border/60 bg-background/20 px-6 py-3 text-sm font-medium text-foreground hover:bg-background/30 transition"
+                    variant="outline"
+                    size="lg"
+                    className="w-full rounded-2xl h-12"
                   >
                     <ExternalLink className="h-4 w-4" />
                     Trailer
-                  </button>
-                )}
+                  </Button>
+                ) : null}
               </div>
 
               {!inLibrary && (
                 <div className="text-xs text-muted-foreground">
-                  Para assistir aqui, adicione um magnet desse filme à sua biblioteca.
+                  Para abrir no VLC, adicione um magnet desse filme à sua biblioteca.
                 </div>
               )}
+              {vlcError ? (
+                <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                  {vlcError}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
       </section>
 
-      <main className="container mx-auto px-6 py-10 space-y-6">
-        <div className="flex gap-1 bg-card/60 backdrop-blur border border-border/40 rounded-lg p-1 w-fit">
+      <main className="mx-auto max-w-xl px-4 py-6 space-y-6">
+        <div className="flex gap-2">
           <TabBtn active={tab === "about"} onClick={() => setTab("about")}>
             Sobre
           </TabBtn>
@@ -160,12 +195,12 @@ function MovieDetailsPage() {
         {tab === "about" && (
           <div className="grid gap-6 md:grid-cols-3">
             <div className="md:col-span-2 space-y-3">
-              <h2 className="font-display text-3xl text-cream">Sinopse</h2>
+              <h2 className="font-display text-3xl text-foreground">Sinopse</h2>
               <p className="text-sm text-muted-foreground leading-relaxed">
                 {data.overview || "Sem descrição disponível."}
               </p>
             </div>
-            <div className="space-y-3 rounded-xl bg-card/60 backdrop-blur border border-border/40 p-4">
+            <div className="space-y-3 rounded-3xl bg-white/5 border border-border/40 p-5">
               <div className="text-xs uppercase tracking-wider text-muted-foreground">
                 Informações
               </div>
@@ -188,38 +223,40 @@ function MovieDetailsPage() {
 
         {tab === "cast" && (
           <div className="space-y-3">
-            <h2 className="font-display text-3xl text-cream">Elenco</h2>
+            <h2 className="font-display text-3xl text-foreground">Elenco</h2>
             {data.cast.length === 0 ? (
               <p className="text-sm text-muted-foreground">Sem elenco disponível.</p>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                {data.cast.map((c) => (
-                  <div
-                    key={c.id}
-                    className="rounded-lg overflow-hidden bg-card/60 border border-border/40"
-                  >
-                    <div className="aspect-[2/3] bg-secondary">
-                      {c.profile ? (
-                        <img
-                          src={c.profile}
-                          alt={c.name}
-                          className="h-full w-full object-cover"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="h-full w-full bg-secondary" />
-                      )}
+              <div className="-mx-4 px-4 overflow-x-auto">
+                <div className="flex gap-3">
+                  {data.cast.map((c) => (
+                    <div
+                      key={c.id}
+                      className="w-[140px] shrink-0 rounded-2xl overflow-hidden bg-white/5 border border-border/40"
+                    >
+                      <div className="aspect-[2/3] bg-secondary">
+                        {c.profile ? (
+                          <img
+                            src={c.profile}
+                            alt={c.name}
+                            className="h-full w-full object-cover"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="h-full w-full bg-secondary" />
+                        )}
+                      </div>
+                      <div className="p-2 space-y-0.5">
+                        <div className="text-sm text-foreground line-clamp-1">{c.name}</div>
+                        {c.character && (
+                          <div className="text-[11px] text-muted-foreground line-clamp-1">
+                            {c.character}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div className="p-2 space-y-0.5">
-                      <div className="text-sm text-cream line-clamp-1">{c.name}</div>
-                      {c.character && (
-                        <div className="text-[11px] text-muted-foreground line-clamp-1">
-                          {c.character}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -227,17 +264,17 @@ function MovieDetailsPage() {
 
         {tab === "similar" && (
           <div className="space-y-3">
-            <h2 className="font-display text-3xl text-cream">Similares</h2>
+            <h2 className="font-display text-3xl text-foreground">Similares</h2>
             {data.recommendations.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nenhuma recomendação disponível.</p>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              <div className="grid grid-cols-3 gap-3">
                 {data.recommendations.map((r: TmdbSearchItem) => (
                   <Link
                     key={r.id}
                     to="/filme/$tmdbId"
                     params={{ tmdbId: String(r.id) }}
-                    className="group rounded-lg overflow-hidden bg-card/60 border border-border/40 hover:border-primary/50 transition"
+                    className="group rounded-2xl overflow-hidden bg-white/5 border border-border/40 hover:border-primary/50 transition"
                   >
                     <div className="aspect-[2/3] bg-secondary">
                       {r.poster ? (
@@ -252,7 +289,7 @@ function MovieDetailsPage() {
                       )}
                     </div>
                     <div className="p-2">
-                      <div className="text-sm text-cream line-clamp-2 group-hover:text-primary transition">
+                      <div className="text-sm text-foreground line-clamp-2 group-hover:text-primary transition">
                         {r.title}
                       </div>
                       {r.year && <div className="text-[11px] text-muted-foreground">{r.year}</div>}
@@ -264,6 +301,8 @@ function MovieDetailsPage() {
           </div>
         )}
       </main>
+
+      <AppBottomNav />
 
       <AddMagnetDialog open={showAdd} onClose={() => setShowAdd(false)} onAdded={setItems} />
     </div>
@@ -282,11 +321,11 @@ function TabBtn({
   return (
     <button
       onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition ${
+      className={
         active
-          ? "bg-primary text-primary-foreground shadow-glow"
-          : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-      }`}
+          ? "shrink-0 rounded-full bg-primary/15 text-primary px-4 h-10 text-xs font-medium border border-primary/20"
+          : "shrink-0 rounded-full bg-white/5 text-muted-foreground px-4 h-10 text-xs font-medium border border-border/40 hover:text-foreground hover:bg-white/10 transition"
+      }
     >
       {children}
     </button>

@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Film, Plus } from "lucide-react";
 import { AppBottomNav } from "@/components/AppBottomNav";
@@ -6,7 +6,7 @@ import { AddMagnetDialog } from "@/components/AddMagnetDialog";
 import { MovieDetailsModal } from "@/components/MovieDetailsModal";
 import { MovieTile } from "@/components/MovieTile";
 import { Button } from "@/components/ui/button";
-import { usePremiumPlayer } from "@/components/PremiumPlayerProvider";
+import { openVlcFromMagnet } from "@/lib/vlc";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 
 export const Route = createFileRoute("/minha-lista")({
@@ -17,11 +17,11 @@ export const Route = createFileRoute("/minha-lista")({
 });
 
 function FavoritesPage() {
+  const navigate = useNavigate();
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [details, setDetails] = useState<LibraryItem | null>(null);
-  const { openPlayer } = usePremiumPlayer();
 
   useEffect(() => {
     getAll().then((items) => {
@@ -83,8 +83,20 @@ function FavoritesPage() {
               <MovieTile
                 key={item.id}
                 item={item}
-                onOpen={setDetails}
-                onPlay={openPlayer}
+                onOpen={(it) => {
+                  if (typeof it.tmdbId === "number" && it.tmdbId > 0) {
+                    navigate({ to: "/filme/$tmdbId", params: { tmdbId: String(it.tmdbId) } });
+                    return;
+                  }
+                  setDetails(it);
+                }}
+                onPlay={(it) => {
+                  openVlcFromMagnet({
+                    magnet: it.magnet,
+                    fileIndex: it.fileIndex,
+                    startSeconds: it.progress ?? 0,
+                  }).catch(() => void 0);
+                }}
                 onToggleFav={handleToggleFav}
               />
             ))}
@@ -109,7 +121,11 @@ function FavoritesPage() {
         onClose={() => setDetails(null)}
         onPlay={(item) => {
           setDetails(null);
-          openPlayer(item);
+          openVlcFromMagnet({
+            magnet: item.magnet,
+            fileIndex: item.fileIndex,
+            startSeconds: item.progress ?? 0,
+          }).catch(() => void 0);
         }}
         onToggleFav={handleToggleFav}
         onDelete={async (item) => {

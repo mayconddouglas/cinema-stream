@@ -1,16 +1,16 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Loader2, Play, Plus, Pencil } from "lucide-react";
-import { Header } from "@/components/Header";
-import { usePremiumPlayer } from "@/components/PremiumPlayerProvider";
+import { ArrowLeft, Loader2, Plus, Tv, Pencil } from "lucide-react";
+import { AppBottomNav } from "@/components/AppBottomNav";
+import { Button } from "@/components/ui/button";
 import { tmdbTv, tmdbTvSeason, type TmdbTvEpisode } from "@/lib/tmdb";
 import { fetchMetaWithRetry } from "@/lib/torrent";
+import { getProxyBase, openVlcFromMagnet } from "@/lib/vlc";
 import {
   episodeId,
   getEpisodesForShow,
   getSeriesAll,
   parseEpisodeFromName,
-  patchEpisode,
   upsertEpisodesBulk,
   upsertSeries,
   type Episode,
@@ -44,12 +44,6 @@ export const Route = createFileRoute("/serie/$tmdbId")({
   component: SeriesDetailsPage,
 });
 
-function getProxyBase() {
-  const env = (import.meta as unknown as { env?: { VITE_TORRENT_PROXY_URL?: string } }).env;
-  const raw = env?.VITE_TORRENT_PROXY_URL;
-  return typeof raw === "string" ? raw.trim().replace(/\/+$/, "") : "";
-}
-
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
@@ -57,7 +51,7 @@ function pad2(n: number) {
 function SeriesDetailsPage() {
   const show = Route.useLoaderData();
   const navigate = useNavigate();
-  const { openPlayer } = usePremiumPlayer();
+  const [openingVlcFor, setOpeningVlcFor] = useState<string | null>(null);
   const [season, setSeason] = useState<number>(() => {
     const s = show.seasons.find((x) => x.seasonNumber > 0)?.seasonNumber ?? 1;
     return s;
@@ -494,20 +488,28 @@ function SeriesDetailsPage() {
     }
   };
 
-  const handleProgress = async (id: string, patch: Partial<Episode>) => {
-    const updated = await patchEpisode(id, patch);
-    if (!updated) return;
-    setLocalEpisodes((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
-  };
-
   const backdrop = show.backdrop ?? show.poster;
   const seasons = show.seasons
     .filter((s) => s.seasonNumber > 0)
     .sort((a, b) => a.seasonNumber - b.seasonNumber);
 
   return (
-    <div className="min-h-screen">
-      <Header />
+    <div className="min-h-screen pb-[92px]">
+      <div className="sticky top-0 z-30 border-b border-border/40 bg-background/70 backdrop-blur-xl">
+        <div className="mx-auto max-w-xl px-4 py-4 flex items-center justify-between gap-3">
+          <button
+            onClick={goBack}
+            className="rounded-2xl border border-border/40 bg-white/5 px-3 py-2 hover:bg-white/10 transition min-h-[44px] inline-flex items-center gap-2"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span className="text-xs">Voltar</span>
+          </button>
+          <div className="min-w-0 text-right">
+            <p className="text-[10px] text-muted-foreground leading-none">Acervos de</p>
+            <p className="text-xs text-foreground truncate">Séries</p>
+          </div>
+        </div>
+      </div>
 
       <section className="relative overflow-hidden border-b border-border/40">
         <div className="relative h-[45vh] min-h-[360px]">
@@ -525,36 +527,25 @@ function SeriesDetailsPage() {
             <div className="absolute inset-0 bg-gradient-to-br from-secondary to-black" />
           )}
 
-          <div className="container mx-auto h-full flex items-end px-6 pb-10 relative">
-            <div className="max-w-3xl space-y-3">
-              <button
-                onClick={goBack}
-                className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                Voltar
-              </button>
-              <h1 className="font-display text-5xl md:text-6xl leading-none text-cream">
-                {show.title}
-              </h1>
-              {show.overview && (
-                <p className="text-sm text-muted-foreground line-clamp-3 max-w-2xl">
-                  {show.overview}
-                </p>
-              )}
+          <div className="mx-auto max-w-xl h-full flex items-end px-4 pb-10 relative">
+            <div className="space-y-3 w-full">
+              <h1 className="font-display text-5xl leading-[0.92] text-foreground">{show.title}</h1>
+              <p className="text-sm text-muted-foreground line-clamp-3">
+                {show.overview || "Sem descrição disponível."}
+              </p>
             </div>
           </div>
         </div>
       </section>
 
-      <main className="container mx-auto px-6 py-10 space-y-8">
-        <div className="grid gap-3 md:grid-cols-3 bg-card/60 backdrop-blur rounded-lg px-4 py-4 border border-border/40">
+      <main className="mx-auto max-w-xl px-4 py-6 space-y-8">
+        <div className="grid gap-3 bg-white/5 rounded-3xl px-4 py-4 border border-border/40">
           <div className="space-y-1.5">
             <div className="text-xs text-muted-foreground">Temporada</div>
             <select
               value={season}
               onChange={(e) => setSeason(Number(e.target.value))}
-              className="w-full rounded-md bg-background/60 border border-border/40 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              className="w-full rounded-2xl bg-white/5 border border-border/40 px-4 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/70 focus:ring-offset-2 focus:ring-offset-background"
             >
               {seasons.map((s) => (
                 <option key={s.seasonNumber} value={s.seasonNumber}>
@@ -947,37 +938,28 @@ function SeriesDetailsPage() {
                                 <Pencil className="h-3.5 w-3.5" />
                               </button>
                             )}
-                            <button
+                            <Button
                               onClick={() => {
-                                if (!canPlay || !local) return;
-                                openPlayer(
-                                  {
-                                    id: local.id,
-                                    title: `${show.title} — S${pad2(local.season)}E${pad2(local.episode)}`,
-                                    magnet: local.magnet!,
-                                    description: ep.overview ?? undefined,
-                                    poster: ep.still ?? undefined,
-                                    backdrop: show.backdrop ?? undefined,
-                                    year: show.year ?? undefined,
-                                    addedAt: Date.now(),
-                                  },
-                                  {
-                                    fileIndex:
-                                      typeof local.fileIndex === "number"
-                                        ? local.fileIndex
-                                        : undefined,
-                                    onProgress: async (episodeId, patch) => {
-                                      await handleProgress(episodeId, patch as Partial<Episode>);
-                                    },
-                                  },
-                                );
+                                if (!canPlay || !local?.magnet) return;
+                                setOpeningVlcFor(local.id);
+                                openVlcFromMagnet({
+                                  magnet: local.magnet,
+                                  fileIndex: local.fileIndex ?? undefined,
+                                  startSeconds: local.progress ?? 0,
+                                })
+                                  .catch(() => void 0)
+                                  .finally(() => setOpeningVlcFor(null));
                               }}
-                              disabled={!canPlay}
-                              className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 transition disabled:opacity-40 min-h-[40px]"
+                              disabled={!canPlay || openingVlcFor === local?.id}
+                              className="rounded-2xl h-10 bg-orange-500 text-black hover:bg-orange-400"
                             >
-                              <Play className="h-4 w-4 fill-current" />
-                              {pct > 0 && pct < 95 ? "Continuar" : "Assistir"}
-                            </button>
+                              {openingVlcFor === local?.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Tv className="h-4 w-4" />
+                              )}
+                              Abrir no VLC (Recomendado)
+                            </Button>
                           </div>
                         </div>
 
@@ -1121,6 +1103,8 @@ function SeriesDetailsPage() {
           )}
         </section>
       </main>
+
+      <AppBottomNav />
     </div>
   );
 }

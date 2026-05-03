@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Film, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -11,7 +11,7 @@ import { HeroCarousel, type HeroSlide } from "@/components/iptv/HeroCarousel";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { MovieTile } from "@/components/MovieTile";
-import { usePremiumPlayer } from "@/components/PremiumPlayerProvider";
+import { openVlcFromMagnet } from "@/lib/vlc";
 import { getSeriesAll, type Series } from "@/lib/series";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 import { migrateLocalStorageToServer } from "@/lib/api";
@@ -36,6 +36,7 @@ export const Route = createFileRoute("/")({
 });
 
 function HomePage() {
+  const navigate = useNavigate();
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [series, setSeries] = useState<Series[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,7 +46,6 @@ function HomePage() {
   const [migrating, setMigrating] = useState(false);
   const [migrationDone, setMigrationDone] = useState(false);
   const [viewAll, setViewAll] = useState<{ title: string; items: LibraryItem[] } | null>(null);
-  const { openPlayer } = usePremiumPlayer();
 
   useEffect(() => {
     Promise.all([getAll(), getSeriesAll()]).then(([items, series]) => {
@@ -106,8 +106,24 @@ function HomePage() {
     return rows;
   }, [items]);
 
-  const handlePlay = useCallback((item: LibraryItem) => openPlayer(item), [openPlayer]);
-  const handleOpen = useCallback((item: LibraryItem) => setDetails(item), []);
+  const handlePlay = useCallback((item: LibraryItem) => {
+    toast.message("Abrindo no VLC...");
+    openVlcFromMagnet({
+      magnet: item.magnet,
+      fileIndex: item.fileIndex,
+      startSeconds: item.progress ?? 0,
+    }).catch(() => toast.error("Não foi possível abrir no VLC."));
+  }, []);
+  const handleOpen = useCallback(
+    (item: LibraryItem) => {
+      if (typeof item.tmdbId === "number" && item.tmdbId > 0) {
+        navigate({ to: "/filme/$tmdbId", params: { tmdbId: String(item.tmdbId) } });
+        return;
+      }
+      setDetails(item);
+    },
+    [navigate],
+  );
   const handleToggleFav = async (item: LibraryItem) => {
     setItems(await update(item.id, { favorite: !item.favorite }));
   };
