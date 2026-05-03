@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Film } from "lucide-react";
+import { Film, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Header } from "@/components/Header";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
 import { MovieCard } from "@/components/MovieCard";
@@ -10,6 +11,7 @@ import { Player } from "@/components/Player";
 import { SeriesCard } from "@/components/SeriesCard";
 import { getSeriesAll, type Series } from "@/lib/series";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
+import { migrateLocalStorageToServer } from "@/lib/api";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -37,6 +39,9 @@ function HomePage() {
   const [showAdd, setShowAdd] = useState(false);
   const [playing, setPlaying] = useState<LibraryItem | null>(null);
   const [details, setDetails] = useState<LibraryItem | null>(null);
+  const [showMigrationBanner, setShowMigrationBanner] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const [migrationDone, setMigrationDone] = useState(false);
 
   useEffect(() => {
     Promise.all([getAll(), getSeriesAll()]).then(([items, series]) => {
@@ -44,6 +49,16 @@ function HomePage() {
       setSeries(series);
       setLoading(false);
     });
+  }, []);
+
+  useEffect(() => {
+    const alreadyMigrated = localStorage.getItem("buffet_migrated_v1");
+    if (alreadyMigrated) return;
+    const hasLocalMovies = !!localStorage.getItem("buffet-video/library/items");
+    const hasLocalSeries = !!localStorage.getItem("buffet-video/series/series");
+    if (hasLocalMovies || hasLocalSeries) {
+      setShowMigrationBanner(true);
+    }
   }, []);
 
   const continueWatching = useMemo(
@@ -103,9 +118,71 @@ function HomePage() {
     setItems(updated);
   };
 
+  const handleMigrate = async () => {
+    setMigrating(true);
+    try {
+      const result = await migrateLocalStorageToServer();
+      setMigrationDone(true);
+      localStorage.setItem("buffet_migrated_v1", "1");
+      setShowMigrationBanner(false);
+      const updated = await getAll();
+      setItems(updated);
+      toast.success(
+        `Migração concluída: ${result.movies} filmes e ${result.episodes} episódios transferidos para o servidor.`,
+        { duration: 5000 },
+      );
+    } catch {
+      toast.error("Falha na migração. Tente novamente.");
+    } finally {
+      setMigrating(false);
+    }
+  };
+
   return (
     <div className="min-h-screen">
       <Header onAdd={() => setShowAdd(true)} />
+
+      {showMigrationBanner && !migrationDone && (
+        <div className="border-b border-yellow-500/20 bg-yellow-500/5 px-4 py-3">
+          <div className="container mx-auto flex items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <span className="text-yellow-400 shrink-0 mt-0.5">⚠</span>
+              <div className="space-y-0.5">
+                <p className="text-sm font-medium text-foreground">Biblioteca local detectada</p>
+                <p className="text-xs text-muted-foreground">
+                  Seus filmes e séries estão salvos apenas neste dispositivo. Migre para o servidor
+                  para acessar em qualquer lugar e nos apps IPTV.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => {
+                  localStorage.setItem("buffet_migrated_v1", "1");
+                  setShowMigrationBanner(false);
+                }}
+                className="rounded-lg bg-secondary/60 px-3 py-2 text-xs hover:bg-secondary transition min-h-[40px]"
+              >
+                Ignorar
+              </button>
+              <button
+                onClick={handleMigrate}
+                disabled={migrating}
+                className="inline-flex items-center gap-2 rounded-lg bg-yellow-500/20 border border-yellow-500/30 px-3 py-2 text-xs font-medium text-yellow-400 hover:bg-yellow-500/30 transition min-h-[40px] disabled:opacity-60"
+              >
+                {migrating ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Migrando...
+                  </>
+                ) : (
+                  "Migrar agora"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Hero */}
       {featured && featuredBackdrop && (
