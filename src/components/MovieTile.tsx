@@ -1,5 +1,6 @@
-import { Play } from "lucide-react";
+import { Play, Star } from "lucide-react";
 import type { LibraryItem } from "@/lib/storage";
+import { cn } from "@/lib/utils";
 
 function getProgressPct(item: LibraryItem) {
   return item.progress && item.duration
@@ -11,17 +12,19 @@ export function MovieTile({
   item,
   onOpen,
   onPlay,
+  onToggleFav,
 }: {
   item: LibraryItem;
   onOpen: (item: LibraryItem) => void;
   onPlay: (item: LibraryItem) => void;
+  onToggleFav?: (item: LibraryItem) => void;
 }) {
   const progressPct = getProgressPct(item);
   const showProgress = progressPct > 0 && progressPct < 95;
 
   return (
     <div
-      className="group relative aspect-[2/3] rounded-lg overflow-hidden bg-secondary border border-border/40 card-hover"
+      className="group relative aspect-[2/3] rounded-2xl overflow-hidden bg-white/5 border border-border/40 card-hover"
       onClick={() => onOpen(item)}
       role="button"
       tabIndex={0}
@@ -38,6 +41,19 @@ export function MovieTile({
       )}
 
       <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/20 to-transparent opacity-80 group-hover:opacity-100 transition-opacity" />
+
+      {onToggleFav ? (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleFav(item);
+          }}
+          className="absolute top-2 right-2 rounded-full bg-black/45 border border-border/40 p-2 hover:bg-black/60 transition"
+          title="Salvar"
+        >
+          <Star className={cn("h-4 w-4", item.favorite ? "text-primary" : "text-white/60")} />
+        </button>
+      ) : null}
 
       <button
         onClick={(e) => {

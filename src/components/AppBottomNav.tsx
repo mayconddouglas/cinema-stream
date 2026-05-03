@@ -1,0 +1,78 @@
+import { Link, useRouterState } from "@tanstack/react-router";
+import { Film, Heart, Home, Search, Tv } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+type NavKey = "home" | "search" | "iptv" | "favorites" | "series";
+
+export function AppBottomNav() {
+  const location = useRouterState({ select: (s) => s.location });
+  const pathname = location.pathname;
+  const hash = location.hash ?? "";
+
+  const active: NavKey =
+    pathname === "/buscar"
+      ? "search"
+      : pathname === "/iptv"
+        ? "iptv"
+        : hash === "#minha-lista"
+          ? "favorites"
+          : hash === "#series"
+            ? "series"
+            : "home";
+
+  const itemBase =
+    "flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 transition active:scale-[0.98]";
+
+  const items: Array<{
+    key: NavKey;
+    label: string;
+    Icon: typeof Home;
+    to?: string;
+    href?: string;
+  }> = [
+    { key: "home", label: "Home", Icon: Home, to: "/" },
+    { key: "search", label: "Buscar", Icon: Search, to: "/buscar" },
+    { key: "iptv", label: "TV", Icon: Tv, to: "/iptv" },
+    { key: "favorites", label: "Lista", Icon: Heart, href: "/#minha-lista" },
+    { key: "series", label: "Séries", Icon: Film, href: "/#series" },
+  ];
+
+  return (
+    <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-border/40 bg-background/80 backdrop-blur-xl">
+      <div className="mx-auto max-w-xl px-3 pb-[max(env(safe-area-inset-bottom),12px)] pt-2">
+        <div className="grid grid-cols-5 gap-1">
+          {items.map(({ key, label, Icon, to, href }) => {
+            const isActive = key === active;
+            const className = cn(
+              itemBase,
+              isActive
+                ? "bg-primary/15 text-primary"
+                : "text-muted-foreground hover:text-foreground hover:bg-white/5",
+            );
+
+            const content = (
+              <>
+                <Icon className={cn("h-5 w-5", isActive ? "text-primary" : "")} />
+                <span className="text-[10px] leading-none">{label}</span>
+              </>
+            );
+
+            if (to) {
+              return (
+                <Link key={key} to={to} className={className}>
+                  {content}
+                </Link>
+              );
+            }
+
+            return (
+              <a key={key} href={href} className={className}>
+                {content}
+              </a>
+            );
+          })}
+        </div>
+      </div>
+    </nav>
+  );
+}

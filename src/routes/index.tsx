@@ -1,14 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Film, Loader2 } from "lucide-react";
+import { Film, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { Header } from "@/components/Header";
+import { AppBottomNav } from "@/components/AppBottomNav";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
-import { MovieCard } from "@/components/MovieCard";
 import { HomeCarouselRow } from "@/components/HomeCarouselRow";
 import { MovieDetailsModal } from "@/components/MovieDetailsModal";
 import { Player } from "@/components/Player";
 import { SeriesCard } from "@/components/SeriesCard";
+import { HeroCarousel, type HeroSlide } from "@/components/iptv/HeroCarousel";
+import { Button } from "@/components/ui/button";
 import { getSeriesAll, type Series } from "@/lib/series";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 import { migrateLocalStorageToServer } from "@/lib/api";
@@ -16,13 +17,13 @@ import { migrateLocalStorageToServer } from "@/lib/api";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Buffet de Vídeo — Sua biblioteca pessoal de streaming" },
+      { title: "Acervos de Filmes — Sua biblioteca pessoal de streaming" },
       {
         name: "description",
         content:
           "Streaming de vídeo via WebTorrent direto no navegador. Adicione seus magnet links, organize sua biblioteca e assista com Plyr.",
       },
-      { property: "og:title", content: "Buffet de Vídeo" },
+      { property: "og:title", content: "Acervos de Filmes" },
       {
         property: "og:description",
         content: "Sua biblioteca pessoal de streaming via WebTorrent.",
@@ -76,8 +77,6 @@ function HomePage() {
   );
   const recentlyAdded = useMemo(() => [...items].sort((a, b) => b.addedAt - a.addedAt), [items]);
   const seriesAdded = useMemo(() => [...series].sort((a, b) => b.addedAt - a.addedAt), [series]);
-  const featured = recentlyAdded[0];
-  const featuredBackdrop = featured?.backdrop ?? featured?.poster;
 
   const continueSorted = useMemo(() => {
     return [...continueWatching].sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
@@ -118,6 +117,25 @@ function HomePage() {
     setItems(updated);
   };
 
+  const heroSlides = useMemo(() => {
+    const picks = recentlyAdded.slice(0, 5);
+    const slides: HeroSlide[] = [];
+    for (const item of picks) {
+      const img = item.backdrop ?? item.poster ?? "";
+      slides.push({
+        key: item.id,
+        title: item.title,
+        subtitle: item.year ? `${item.year}` : undefined,
+        image: img || undefined,
+        badge: "Biblioteca",
+        onPlay: () => handlePlay(item),
+        onSecondary: () => handleOpen(item),
+        secondaryLabel: "Detalhes",
+      });
+    }
+    return slides;
+  }, [recentlyAdded]);
+
   const handleMigrate = async () => {
     setMigrating(true);
     try {
@@ -139,14 +157,30 @@ function HomePage() {
   };
 
   return (
-    <div className="min-h-screen">
-      <Header onAdd={() => setShowAdd(true)} />
+    <div className="min-h-screen pb-[92px]">
+      <div className="sticky top-0 z-30 border-b border-border/40 bg-background/70 backdrop-blur-xl">
+        <div className="mx-auto max-w-xl px-4 py-4 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">Acervos de</p>
+            <h1 className="font-display text-3xl leading-none tracking-wide text-foreground truncate">
+              Filmes
+            </h1>
+          </div>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="shrink-0 rounded-2xl border border-border/40 bg-white/5 px-4 py-2 text-left hover:bg-white/10 transition min-h-[44px] inline-flex items-center gap-2"
+          >
+            <Plus className="h-4 w-4 text-primary" />
+            <span className="text-xs text-foreground">Adicionar</span>
+          </button>
+        </div>
+      </div>
 
       {showMigrationBanner && !migrationDone && (
-        <div className="border-b border-yellow-500/20 bg-yellow-500/5 px-4 py-3">
-          <div className="container mx-auto flex items-center justify-between gap-4">
+        <div className="border-b border-primary/20 bg-primary/5 px-4 py-3">
+          <div className="mx-auto max-w-xl flex items-center justify-between gap-4">
             <div className="flex items-start gap-3">
-              <span className="text-yellow-400 shrink-0 mt-0.5">⚠</span>
+              <span className="text-primary shrink-0 mt-0.5">⚠</span>
               <div className="space-y-0.5">
                 <p className="text-sm font-medium text-foreground">Biblioteca local detectada</p>
                 <p className="text-xs text-muted-foreground">
@@ -161,14 +195,14 @@ function HomePage() {
                   localStorage.setItem("buffet_migrated_v1", "1");
                   setShowMigrationBanner(false);
                 }}
-                className="rounded-lg bg-secondary/60 px-3 py-2 text-xs hover:bg-secondary transition min-h-[40px]"
+                className="rounded-xl bg-secondary/60 border border-border/40 px-3 py-2 text-xs hover:bg-secondary/80 transition min-h-[40px]"
               >
                 Ignorar
               </button>
               <button
                 onClick={handleMigrate}
                 disabled={migrating}
-                className="inline-flex items-center gap-2 rounded-lg bg-yellow-500/20 border border-yellow-500/30 px-3 py-2 text-xs font-medium text-yellow-400 hover:bg-yellow-500/30 transition min-h-[40px] disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-xl bg-primary/20 border border-primary/30 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/30 transition min-h-[40px] disabled:opacity-60"
               >
                 {migrating ? (
                   <>
@@ -184,48 +218,14 @@ function HomePage() {
         </div>
       )}
 
-      {/* Hero */}
-      {featured && featuredBackdrop && (
-        <section className="relative h-[55vh] min-h-[380px] overflow-hidden border-b border-border/40">
-          <img
-            src={featuredBackdrop}
-            alt=""
-            aria-hidden
-            className="absolute inset-0 h-full w-full object-cover scale-110 blur-2xl opacity-50"
-          />
-          <div className="absolute inset-0" style={{ background: "var(--gradient-hero)" }} />
-          <div className="container mx-auto h-full flex items-end px-6 pb-12 relative">
-            <div className="max-w-2xl space-y-4 animate-fade-up">
-              <span className="inline-block text-xs tracking-[0.3em] uppercase text-primary">
-                Em destaque
-              </span>
-              <h1 className="font-display text-6xl md:text-7xl leading-none text-cream">
-                {featured.title}
-              </h1>
-              {featured.year && <p className="text-sm text-muted-foreground">{featured.year}</p>}
-              {featured.description && (
-                <p className="text-base text-muted-foreground line-clamp-3 max-w-xl">
-                  {featured.description}
-                </p>
-              )}
-              <button
-                onClick={() => handlePlay(featured)}
-                className="inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-glow hover:brightness-110 transition"
-              >
-                ▶ Assistir agora
-              </button>
-            </div>
-          </div>
-        </section>
-      )}
-
-      <main className="container mx-auto px-6 py-10 space-y-10">
+      <main className="mx-auto max-w-xl px-4 py-6 space-y-10">
         {loading ? (
           <p className="text-muted-foreground">Carregando biblioteca...</p>
         ) : items.length === 0 && series.length === 0 ? (
           <EmptyState onAdd={() => setShowAdd(true)} />
         ) : (
           <>
+            {heroSlides.length > 0 ? <HeroCarousel slides={heroSlides} /> : null}
             {items.length > 0 && (
               <>
                 <HomeCarouselRow
@@ -233,18 +233,23 @@ function HomePage() {
                   items={continueSorted}
                   onOpen={handleOpen}
                   onPlay={handlePlay}
+                  onToggleFav={handleToggleFav}
                 />
-                <HomeCarouselRow
-                  title="Minha lista"
-                  items={favorites}
-                  onOpen={handleOpen}
-                  onPlay={handlePlay}
-                />
+                <section id="minha-lista" className="scroll-mt-20">
+                  <HomeCarouselRow
+                    title="Minha lista"
+                    items={favorites}
+                    onOpen={handleOpen}
+                    onPlay={handlePlay}
+                    onToggleFav={handleToggleFav}
+                  />
+                </section>
                 <HomeCarouselRow
                   title="Adicionados recentemente"
                   items={recentlyAdded}
                   onOpen={handleOpen}
                   onPlay={handlePlay}
+                  onToggleFav={handleToggleFav}
                 />
                 {yearRows.map((row) => (
                   <HomeCarouselRow
@@ -253,50 +258,35 @@ function HomePage() {
                     items={row.items}
                     onOpen={handleOpen}
                     onPlay={handlePlay}
+                    onToggleFav={handleToggleFav}
                   />
                 ))}
               </>
             )}
 
             {seriesAdded.length > 0 && (
-              <section className="space-y-3">
-                <h2 className="font-display text-2xl text-cream">Séries</h2>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
+              <section id="series" className="space-y-3 scroll-mt-20">
+                <h2 className="text-sm font-semibold text-foreground">Séries</h2>
+                <div className="grid grid-cols-3 gap-3">
                   {seriesAdded.map((s, idx) => (
                     <SeriesCard key={s.tmdbId} series={s} index={idx} />
                   ))}
                 </div>
               </section>
             )}
-
-            {items.length > 0 && (
-              <section className="space-y-3">
-                <h2 className="font-display text-2xl text-cream">Biblioteca</h2>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
-                  {recentlyAdded.map((item, idx) => (
-                    <MovieCard
-                      key={item.id}
-                      item={item}
-                      index={idx}
-                      onPlay={handlePlay}
-                      onOpen={handleOpen}
-                      onToggleFav={handleToggleFav}
-                      onDelete={handleDelete}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
           </>
         )}
-
-        <footer className="pt-12 pb-6 border-t border-border/40 text-center text-xs text-muted-foreground space-y-1">
-          <p>
-            Buffet de Vídeo é um player WebTorrent. Adicione apenas conteúdo do qual você tem
-            direito de acesso.
-          </p>
-        </footer>
       </main>
+
+      <AppBottomNav />
+
+      <Button
+        onClick={() => setShowAdd(true)}
+        size="icon"
+        className="fixed right-4 bottom-[96px] z-40 h-14 w-14 rounded-2xl shadow-glow"
+      >
+        <Plus className="h-5 w-5" />
+      </Button>
 
       <AddMagnetDialog open={showAdd} onClose={() => setShowAdd(false)} onAdded={setItems} />
       <MovieDetailsModal
@@ -319,23 +309,20 @@ function HomePage() {
 
 function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
-    <div className="text-center py-20 space-y-6 max-w-md mx-auto animate-fade-up">
+    <div className="text-center py-16 space-y-6 max-w-md mx-auto animate-fade-up">
       <div className="mx-auto h-20 w-20 rounded-full bg-primary/10 flex items-center justify-center">
         <Film className="h-10 w-10 text-primary" />
       </div>
       <div className="space-y-2">
-        <h2 className="font-display text-4xl text-cream">Sua sala está vazia</h2>
+        <h2 className="font-display text-4xl text-foreground">Sua sala está vazia</h2>
         <p className="text-muted-foreground">
           Comece adicionando um magnet link de um vídeo do qual você tem direito — seus próprios
           arquivos, conteúdo de domínio público ou Creative Commons.
         </p>
       </div>
-      <button
-        onClick={onAdd}
-        className="inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-glow hover:brightness-110 transition"
-      >
+      <Button onClick={onAdd} size="lg" className="rounded-2xl">
         + Adicionar primeiro vídeo
-      </button>
+      </Button>
     </div>
   );
 }

@@ -11,7 +11,9 @@ export type HeroSlide = {
   image?: string;
   badge?: string;
   onPlay: () => void;
-  onVlc: () => void;
+  onSecondary?: () => void;
+  primaryLabel?: string;
+  secondaryLabel?: string;
 };
 
 export function HeroCarousel({ slides }: { slides: HeroSlide[] }) {
@@ -67,16 +69,18 @@ export function HeroCarousel({ slides }: { slides: HeroSlide[] }) {
                     <div className="flex gap-2 flex-wrap">
                       <Button onClick={s.onPlay} size="lg" className="rounded-2xl">
                         <Play className="h-4 w-4" />
-                        Play
+                        {s.primaryLabel ?? "Play"}
                       </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={s.onVlc}
-                        size="lg"
-                        className="rounded-2xl"
-                      >
-                        Abrir no VLC
-                      </Button>
+                      {s.onSecondary ? (
+                        <Button
+                          variant="secondary"
+                          onClick={s.onSecondary}
+                          size="lg"
+                          className="rounded-2xl"
+                        >
+                          {s.secondaryLabel ?? "Abrir no VLC"}
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 </div>

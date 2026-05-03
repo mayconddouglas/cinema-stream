@@ -13,18 +13,20 @@ export function HomeCarouselRow({
   items,
   onOpen,
   onPlay,
+  onToggleFav,
 }: {
   title: string;
   items: LibraryItem[];
   onOpen: (item: LibraryItem) => void;
   onPlay: (item: LibraryItem) => void;
+  onToggleFav?: (item: LibraryItem) => void;
 }) {
   if (items.length === 0) return null;
 
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="font-display text-2xl text-cream">{title}</h2>
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
       </div>
 
       <div className="relative">
@@ -35,7 +37,7 @@ export function HomeCarouselRow({
                 key={item.id}
                 className="pl-3 basis-[44%] sm:basis-[28%] md:basis-[20%] lg:basis-[16%] xl:basis-[14%]"
               >
-                <MovieTile item={item} onOpen={onOpen} onPlay={onPlay} />
+                <MovieTile item={item} onOpen={onOpen} onPlay={onPlay} onToggleFav={onToggleFav} />
               </CarouselItem>
             ))}
           </CarouselContent>

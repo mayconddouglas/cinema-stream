@@ -241,10 +241,11 @@ function IptvPage() {
         image: pickVod.stream_icon ?? "",
         badge: "Filmes",
         onPlay: () => void openVod(pickVod),
-        onVlc: () => {
+        onSecondary: () => {
           const u = iptvVodRelayUrl(pickVod.stream_id);
           window.location.href = getVlcDeepLink(u);
         },
+        secondaryLabel: "Abrir no VLC",
       });
     }
     if (pickLive) {
@@ -255,10 +256,11 @@ function IptvPage() {
         image: pickLive.stream_icon ?? "",
         badge: "Ao vivo",
         onPlay: () => void openLive(pickLive),
-        onVlc: () => {
+        onSecondary: () => {
           const u = iptvLiveRelayUrl(pickLive.stream_id);
           window.location.href = getVlcDeepLink(u);
         },
+        secondaryLabel: "Abrir no VLC",
       });
     }
     const moreVod = homeVod.slice(0, 3);
@@ -271,10 +273,11 @@ function IptvPage() {
         image: m.stream_icon ?? "",
         badge: "Filmes",
         onPlay: () => void openVod(m),
-        onVlc: () => {
+        onSecondary: () => {
           const u = iptvVodRelayUrl(m.stream_id);
           window.location.href = getVlcDeepLink(u);
         },
+        secondaryLabel: "Abrir no VLC",
       });
       if (slides.length >= 5) break;
     }
