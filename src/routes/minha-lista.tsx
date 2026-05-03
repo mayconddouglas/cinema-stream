@@ -6,7 +6,7 @@ import { AddMagnetDialog } from "@/components/AddMagnetDialog";
 import { MovieDetailsModal } from "@/components/MovieDetailsModal";
 import { MovieTile } from "@/components/MovieTile";
 import { Button } from "@/components/ui/button";
-import { openVlcFromMagnet } from "@/lib/vlc";
+import { useAuth } from "@/components/AuthProvider";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 
 export const Route = createFileRoute("/minha-lista")({
@@ -18,6 +18,7 @@ export const Route = createFileRoute("/minha-lista")({
 
 function FavoritesPage() {
   const navigate = useNavigate();
+  const { openVlcWithAuth } = useAuth();
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -91,11 +92,11 @@ function FavoritesPage() {
                   setDetails(it);
                 }}
                 onPlay={(it) => {
-                  openVlcFromMagnet({
+                  openVlcWithAuth({
                     magnet: it.magnet,
                     fileIndex: it.fileIndex,
                     startSeconds: it.progress ?? 0,
-                  }).catch(() => void 0);
+                  });
                 }}
                 onToggleFav={handleToggleFav}
               />
@@ -121,11 +122,11 @@ function FavoritesPage() {
         onClose={() => setDetails(null)}
         onPlay={(item) => {
           setDetails(null);
-          openVlcFromMagnet({
+          openVlcWithAuth({
             magnet: item.magnet,
             fileIndex: item.fileIndex,
             startSeconds: item.progress ?? 0,
-          }).catch(() => void 0);
+          });
         }}
         onToggleFav={handleToggleFav}
         onDelete={async (item) => {

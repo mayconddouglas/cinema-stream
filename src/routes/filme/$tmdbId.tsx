@@ -4,8 +4,8 @@ import { ArrowLeft, ExternalLink, Loader2, Tv } from "lucide-react";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
 import { AppBottomNav } from "@/components/AppBottomNav";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/components/AuthProvider";
 import { getAll, type LibraryItem } from "@/lib/storage";
-import { openVlcFromMagnet } from "@/lib/vlc";
 import { tmdbMovie, type TmdbSearchItem } from "@/lib/tmdb";
 
 type Tab = "about" | "cast" | "similar";
@@ -22,6 +22,7 @@ export const Route = createFileRoute("/filme/$tmdbId")({
 function MovieDetailsPage() {
   const data = Route.useLoaderData();
   const navigate = useNavigate();
+  const { openVlcWithAuth } = useAuth();
   const [tab, setTab] = useState<Tab>("about");
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [showAdd, setShowAdd] = useState(false);
@@ -59,17 +60,12 @@ function MovieDetailsPage() {
     if (!inLibrary) return;
     setOpeningVlc(true);
     setVlcError(null);
-    try {
-      await openVlcFromMagnet({
-        magnet: inLibrary.magnet,
-        fileIndex: inLibrary.fileIndex,
-        startSeconds: inLibrary.progress ?? 0,
-      });
-    } catch {
-      setVlcError("Não foi possível abrir no VLC. Verifique o proxy e o magnet.");
-    } finally {
-      setOpeningVlc(false);
-    }
+    openVlcWithAuth({
+      magnet: inLibrary.magnet,
+      fileIndex: inLibrary.fileIndex,
+      startSeconds: inLibrary.progress ?? 0,
+    });
+    setTimeout(() => setOpeningVlc(false), 800);
   };
 
   return (

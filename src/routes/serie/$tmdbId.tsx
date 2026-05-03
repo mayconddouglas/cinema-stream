@@ -3,9 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Loader2, Plus, Tv, Pencil } from "lucide-react";
 import { AppBottomNav } from "@/components/AppBottomNav";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/components/AuthProvider";
 import { tmdbTv, tmdbTvSeason, type TmdbTvEpisode } from "@/lib/tmdb";
 import { fetchMetaWithRetry } from "@/lib/torrent";
-import { getProxyBase, openVlcFromMagnet } from "@/lib/vlc";
+import { getProxyBase } from "@/lib/vlc";
 import {
   episodeId,
   getEpisodesForShow,
@@ -51,6 +52,7 @@ function pad2(n: number) {
 function SeriesDetailsPage() {
   const show = Route.useLoaderData();
   const navigate = useNavigate();
+  const { openVlcWithAuth } = useAuth();
   const [openingVlcFor, setOpeningVlcFor] = useState<string | null>(null);
   const [season, setSeason] = useState<number>(() => {
     const s = show.seasons.find((x) => x.seasonNumber > 0)?.seasonNumber ?? 1;
@@ -942,13 +944,12 @@ function SeriesDetailsPage() {
                               onClick={() => {
                                 if (!canPlay || !local?.magnet) return;
                                 setOpeningVlcFor(local.id);
-                                openVlcFromMagnet({
+                                openVlcWithAuth({
                                   magnet: local.magnet,
                                   fileIndex: local.fileIndex ?? undefined,
                                   startSeconds: local.progress ?? 0,
-                                })
-                                  .catch(() => void 0)
-                                  .finally(() => setOpeningVlcFor(null));
+                                });
+                                setTimeout(() => setOpeningVlcFor(null), 800);
                               }}
                               disabled={!canPlay || openingVlcFor === local?.id}
                               className="rounded-2xl h-10 bg-orange-500 text-black hover:bg-orange-400"

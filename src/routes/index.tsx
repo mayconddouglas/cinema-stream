@@ -11,7 +11,7 @@ import { HeroCarousel, type HeroSlide } from "@/components/iptv/HeroCarousel";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { MovieTile } from "@/components/MovieTile";
-import { openVlcFromMagnet } from "@/lib/vlc";
+import { useAuth } from "@/components/AuthProvider";
 import { getSeriesAll, type Series } from "@/lib/series";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 import { migrateLocalStorageToServer } from "@/lib/api";
@@ -37,6 +37,7 @@ export const Route = createFileRoute("/")({
 
 function HomePage() {
   const navigate = useNavigate();
+  const { openVlcWithAuth } = useAuth();
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [series, setSeries] = useState<Series[]>([]);
   const [loading, setLoading] = useState(true);
@@ -108,12 +109,12 @@ function HomePage() {
 
   const handlePlay = useCallback((item: LibraryItem) => {
     toast.message("Abrindo no VLC...");
-    openVlcFromMagnet({
+    openVlcWithAuth({
       magnet: item.magnet,
       fileIndex: item.fileIndex,
       startSeconds: item.progress ?? 0,
-    }).catch(() => toast.error("Não foi possível abrir no VLC."));
-  }, []);
+    });
+  }, [openVlcWithAuth]);
   const handleOpen = useCallback(
     (item: LibraryItem) => {
       if (typeof item.tmdbId === "number" && item.tmdbId > 0) {
@@ -320,7 +321,7 @@ function HomePage() {
         onClose={() => setDetails(null)}
         onPlay={(item) => {
           setDetails(null);
-          openPlayer(item);
+          handlePlay(item);
         }}
         onToggleFav={handleToggleFav}
         onDelete={handleDelete}
