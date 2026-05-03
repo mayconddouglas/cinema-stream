@@ -7,6 +7,7 @@ import { tmdbTv, tmdbTvSeason, type TmdbTvEpisode } from "@/lib/tmdb";
 import {
   episodeId,
   getEpisodesForShow,
+  getSeriesAll,
   parseEpisodeFromName,
   patchEpisode,
   upsertEpisodesBulk,
@@ -64,6 +65,24 @@ function SeriesDetailsPage() {
 
   useEffect(() => {
     getEpisodesForShow(show.id).then(setLocalEpisodes);
+  }, [show.id]);
+
+  useEffect(() => {
+    const run = async () => {
+      const all = await getSeriesAll();
+      const existing = all.find((s) => s.tmdbId === show.id) ?? null;
+      await upsertSeries({
+        tmdbId: show.id,
+        title: show.title,
+        originalTitle: show.originalTitle,
+        overview: show.overview,
+        year: show.year,
+        poster: show.poster,
+        backdrop: show.backdrop,
+        addedAt: existing?.addedAt ?? Date.now(),
+      });
+    };
+    void run();
   }, [show.id]);
 
   useEffect(() => {

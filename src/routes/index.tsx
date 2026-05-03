@@ -7,6 +7,8 @@ import { MovieCard } from "@/components/MovieCard";
 import { HomeCarouselRow } from "@/components/HomeCarouselRow";
 import { MovieDetailsModal } from "@/components/MovieDetailsModal";
 import { Player } from "@/components/Player";
+import { SeriesCard } from "@/components/SeriesCard";
+import { getSeriesAll, type Series } from "@/lib/series";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 
 export const Route = createFileRoute("/")({
@@ -30,14 +32,16 @@ export const Route = createFileRoute("/")({
 
 function HomePage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
+  const [series, setSeries] = useState<Series[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [playing, setPlaying] = useState<LibraryItem | null>(null);
   const [details, setDetails] = useState<LibraryItem | null>(null);
 
   useEffect(() => {
-    getAll().then((items) => {
+    Promise.all([getAll(), getSeriesAll()]).then(([items, series]) => {
       setItems(items);
+      setSeries(series);
       setLoading(false);
     });
   }, []);
@@ -56,6 +60,7 @@ function HomePage() {
     [items],
   );
   const recentlyAdded = useMemo(() => [...items].sort((a, b) => b.addedAt - a.addedAt), [items]);
+  const seriesAdded = useMemo(() => [...series].sort((a, b) => b.addedAt - a.addedAt), [series]);
   const featured = recentlyAdded[0];
   const featuredBackdrop = featured?.backdrop ?? featured?.poster;
 
@@ -140,54 +145,71 @@ function HomePage() {
       <main className="container mx-auto px-6 py-10 space-y-10">
         {loading ? (
           <p className="text-muted-foreground">Carregando biblioteca...</p>
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && series.length === 0 ? (
           <EmptyState onAdd={() => setShowAdd(true)} />
         ) : (
           <>
-            <HomeCarouselRow
-              title="Continuar assistindo"
-              items={continueSorted}
-              onOpen={handleOpen}
-              onPlay={handlePlay}
-            />
-            <HomeCarouselRow
-              title="Minha lista"
-              items={favorites}
-              onOpen={handleOpen}
-              onPlay={handlePlay}
-            />
-            <HomeCarouselRow
-              title="Adicionados recentemente"
-              items={recentlyAdded}
-              onOpen={handleOpen}
-              onPlay={handlePlay}
-            />
-            {yearRows.map((row) => (
-              <HomeCarouselRow
-                key={row.year}
-                title={`Ano ${row.year}`}
-                items={row.items}
-                onOpen={handleOpen}
-                onPlay={handlePlay}
-              />
-            ))}
-
-            <section className="space-y-3">
-              <h2 className="font-display text-2xl text-cream">Biblioteca</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
-                {recentlyAdded.map((item, idx) => (
-                  <MovieCard
-                    key={item.id}
-                    item={item}
-                    index={idx}
-                    onPlay={handlePlay}
+            {items.length > 0 && (
+              <>
+                <HomeCarouselRow
+                  title="Continuar assistindo"
+                  items={continueSorted}
+                  onOpen={handleOpen}
+                  onPlay={handlePlay}
+                />
+                <HomeCarouselRow
+                  title="Minha lista"
+                  items={favorites}
+                  onOpen={handleOpen}
+                  onPlay={handlePlay}
+                />
+                <HomeCarouselRow
+                  title="Adicionados recentemente"
+                  items={recentlyAdded}
+                  onOpen={handleOpen}
+                  onPlay={handlePlay}
+                />
+                {yearRows.map((row) => (
+                  <HomeCarouselRow
+                    key={row.year}
+                    title={`Ano ${row.year}`}
+                    items={row.items}
                     onOpen={handleOpen}
-                    onToggleFav={handleToggleFav}
-                    onDelete={handleDelete}
+                    onPlay={handlePlay}
                   />
                 ))}
-              </div>
-            </section>
+              </>
+            )}
+
+            {seriesAdded.length > 0 && (
+              <section className="space-y-3">
+                <h2 className="font-display text-2xl text-cream">Séries</h2>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
+                  {seriesAdded.map((s, idx) => (
+                    <SeriesCard key={s.tmdbId} series={s} index={idx} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {items.length > 0 && (
+              <section className="space-y-3">
+                <h2 className="font-display text-2xl text-cream">Biblioteca</h2>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
+                  {recentlyAdded.map((item, idx) => (
+                    <MovieCard
+                      key={item.id}
+                      item={item}
+                      index={idx}
+                      onPlay={handlePlay}
+                      onOpen={handleOpen}
+                      onToggleFav={handleToggleFav}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
           </>
         )}
 
