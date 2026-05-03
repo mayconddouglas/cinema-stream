@@ -890,7 +890,8 @@ const server = http.createServer(async (req, res) => {
       }
 
       const streamUrl = `/stream?magnet=${encodeURIComponent(movie.magnet)}&index=${movie.file_index ?? 0}`;
-      res.writeHead(302, { Location: streamUrl });
+      const host = XTREAM_HOST || `http://${req.headers.host}`;
+      res.writeHead(307, { Location: `${host}${streamUrl}` });
       res.end();
       return;
     }
@@ -916,7 +917,8 @@ const server = http.createServer(async (req, res) => {
       }
 
       const streamUrl = `/stream?magnet=${encodeURIComponent(ep.magnet)}&index=${ep.file_index ?? 0}`;
-      res.writeHead(302, { Location: streamUrl });
+      const host = XTREAM_HOST || `http://${req.headers.host}`;
+      res.writeHead(307, { Location: `${host}${streamUrl}` });
       res.end();
       return;
     }
