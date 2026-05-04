@@ -57,7 +57,10 @@ function MovieDetailsPage() {
   };
 
   const openVlc = async () => {
-    if (!inLibrary) return;
+    if (!inLibrary) {
+      setShowAdd(true);
+      return;
+    }
     setOpeningVlc(true);
     setVlcError(null);
     openVlcWithAuth({
@@ -124,9 +127,14 @@ function MovieDetailsPage() {
               </p>
 
               <div className="space-y-3">
+                {!inLibrary && (
+                  <div className="rounded-2xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-400">
+                    Nenhum magnet adicionado. Clique em 'Abrir no VLC' para adicionar.
+                  </div>
+                )}
                 <Button
                   onClick={() => void openVlc()}
-                  disabled={!inLibrary || openingVlc}
+                  disabled={openingVlc}
                   size="lg"
                   className="w-full rounded-2xl h-14 bg-orange-500 text-black hover:bg-orange-400"
                 >
@@ -160,11 +168,6 @@ function MovieDetailsPage() {
                 ) : null}
               </div>
 
-              {!inLibrary && (
-                <div className="text-xs text-muted-foreground">
-                  Para abrir no VLC, adicione um magnet desse filme à sua biblioteca.
-                </div>
-              )}
               {vlcError ? (
                 <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                   {vlcError}
