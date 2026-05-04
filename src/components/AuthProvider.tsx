@@ -9,6 +9,8 @@ type AuthContextValue = {
   user: User | null;
   session: Session | null;
   isAllowed: boolean;
+  accessDenied: boolean;
+  dismissAccessDenied: () => void;
   requireAuth: (action: () => void | Promise<void>) => void;
   openVlcWithAuth: (opts: {
     magnet: string;
@@ -38,6 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isAllowed, setIsAllowed] = useState(false);
+  const [accessDenied, setAccessDenied] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [pending, setPending] = useState<PendingAction | null>(null);
 
@@ -78,8 +81,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     checkAllow(user).then(async (ok) => {
       setIsAllowed(ok);
       if (!ok) {
-        toast.error("Acesso não aprovado (email não está na lista).");
+        setAccessDenied(true);
+        setAuthOpen(true);
         await supabase.auth.signOut();
+      } else {
+        setAccessDenied(false);
       }
     });
   }, [checkAllow, user]);
@@ -89,6 +95,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut();
     setAuthOpen(false);
     setPending(null);
+    setAccessDenied(false);
+  }, []);
+
+  const dismissAccessDenied = useCallback(() => {
+    setAccessDenied(false);
+    setAuthOpen(false);
   }, []);
 
   const tryRunPending = useCallback(async () => {
@@ -165,14 +177,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [isAllowed, user]);
 
   const value = useMemo(
-    () => ({ user, session, isAllowed, requireAuth, openVlcWithAuth, signOut }),
-    [isAllowed, openVlcWithAuth, requireAuth, session, signOut, user],
+    () => ({
+      user,
+      session,
+      isAllowed,
+      accessDenied,
+      dismissAccessDenied,
+      requireAuth,
+      openVlcWithAuth,
+      signOut,
+    }),
+    [
+      isAllowed,
+      accessDenied,
+      dismissAccessDenied,
+      openVlcWithAuth,
+      requireAuth,
+      session,
+      signOut,
+      user,
+    ],
   );
 
   return (
     <AuthContext.Provider value={value}>
       {children}
-      <AuthDialog open={authOpen} onOpenChange={setAuthOpen} onAuthed={tryRunPending} />
+      <AuthDialog
+        open={authOpen}
+        onOpenChange={setAuthOpen}
+        onAuthed={tryRunPending}
+        accessDenied={accessDenied}
+        dismissAccessDenied={dismissAccessDenied}
+      />
     </AuthContext.Provider>
   );
 }
