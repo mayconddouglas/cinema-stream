@@ -3,7 +3,7 @@ import { Film, Search, Tv } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 
 export function Header({ onAdd }: { onAdd?: () => void }) {
-  const { user, isAllowed, requireAuth, signOut } = useAuth();
+  const { user, signOut } = useAuth();
   const email = typeof user?.email === "string" ? user.email : "";
   const emailLabel = email.length > 20 ? `${email.slice(0, 20)}...` : email;
 
@@ -40,28 +40,16 @@ export function Header({ onAdd }: { onAdd?: () => void }) {
             </button>
           )}
           {!user ? (
-            <button
-              onClick={() => requireAuth(() => {})}
+            <Link
+              to="/login"
               className="rounded-xl bg-secondary/60 border border-border/40 px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition min-h-[44px]"
             >
               Entrar
-            </button>
-          ) : user && isAllowed ? (
+            </Link>
+          ) : (
             <>
               <span className="rounded-xl bg-secondary/60 border border-border/40 px-4 py-2 text-sm font-medium text-foreground min-h-[44px] inline-flex items-center">
                 {emailLabel || "Conta"}
-              </span>
-              <button
-                onClick={() => void signOut()}
-                className="rounded-xl bg-secondary/60 border border-border/40 px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition min-h-[44px]"
-              >
-                Sair
-              </button>
-            </>
-          ) : (
-            <>
-              <span className="rounded-xl bg-destructive/20 border border-destructive/40 px-4 py-2 text-sm font-medium text-destructive min-h-[44px] inline-flex items-center">
-                Acesso negado
               </span>
               <button
                 onClick={() => void signOut()}

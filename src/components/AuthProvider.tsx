@@ -9,8 +9,6 @@ type AuthContextValue = {
   user: User | null;
   session: Session | null;
   isAllowed: boolean;
-  accessDenied: boolean;
-  dismissAccessDenied: () => void;
   requireAuth: (action: () => void | Promise<void>) => void;
   openVlcWithAuth: (opts: {
     magnet: string;
@@ -40,7 +38,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isAllowed, setIsAllowed] = useState(false);
-  const [accessDenied, setAccessDenied] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [pending, setPending] = useState<PendingAction | null>(null);
 
@@ -59,48 +56,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const checkAllow = useCallback(async (u: User | null) => {
-    if (!supabase) return false;
-    const email = typeof u?.email === "string" ? u.email : "";
-    if (!email) return false;
-    const { data, error } = await supabase
-      .from("allowed_emails")
-      .select("email")
-      .eq("email", email)
-      .maybeSingle();
-    if (error) return false;
-    return !!data?.email;
-  }, []);
-
   useEffect(() => {
-    if (!supabase) return;
-    if (!user) {
-      setIsAllowed(false);
-      return;
-    }
-    checkAllow(user).then(async (ok) => {
-      setIsAllowed(ok);
-      if (!ok) {
-        setAccessDenied(true);
-        setAuthOpen(true);
-        await supabase.auth.signOut();
-      } else {
-        setAccessDenied(false);
-      }
-    });
-  }, [checkAllow, user]);
+    setIsAllowed(Boolean(user));
+  }, [user]);
 
   const signOut = useCallback(async () => {
     if (!supabase) return;
     await supabase.auth.signOut();
     setAuthOpen(false);
     setPending(null);
-    setAccessDenied(false);
-  }, []);
-
-  const dismissAccessDenied = useCallback(() => {
-    setAccessDenied(false);
-    setAuthOpen(false);
   }, []);
 
   const tryRunPending = useCallback(async () => {
@@ -181,34 +145,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       session,
       isAllowed,
-      accessDenied,
-      dismissAccessDenied,
       requireAuth,
       openVlcWithAuth,
       signOut,
     }),
-    [
-      isAllowed,
-      accessDenied,
-      dismissAccessDenied,
-      openVlcWithAuth,
-      requireAuth,
-      session,
-      signOut,
-      user,
-    ],
+    [isAllowed, openVlcWithAuth, requireAuth, session, signOut, user],
   );
 
   return (
     <AuthContext.Provider value={value}>
       {children}
-      <AuthDialog
-        open={authOpen}
-        onOpenChange={setAuthOpen}
-        onAuthed={tryRunPending}
-        accessDenied={accessDenied}
-        dismissAccessDenied={dismissAccessDenied}
-      />
+      <AuthDialog open={authOpen} onOpenChange={setAuthOpen} onAuthed={tryRunPending} />
     </AuthContext.Provider>
   );
 }

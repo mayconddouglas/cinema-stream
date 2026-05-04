@@ -9,14 +9,10 @@ export function AuthDialog({
   open,
   onOpenChange,
   onAuthed,
-  accessDenied,
-  dismissAccessDenied,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAuthed: () => void;
-  accessDenied?: boolean;
-  dismissAccessDenied?: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [sending, setSending] = useState(false);
@@ -51,11 +47,7 @@ export function AuthDialog({
     <Dialog
       open={open}
       onOpenChange={(o) => {
-        if (!o && accessDenied && dismissAccessDenied) {
-          dismissAccessDenied();
-        } else {
-          onOpenChange(o);
-        }
+        onOpenChange(o);
         if (!o) {
           setError(null);
           setSending(false);
@@ -63,39 +55,17 @@ export function AuthDialog({
         }
       }}
     >
-      <DialogContent
-        className="rounded-3xl border-border/40 bg-background/95 backdrop-blur-xl"
-        onInteractOutside={(e) => {
-          if (accessDenied) e.preventDefault();
-        }}
-        onEscapeKeyDown={(e) => {
-          if (accessDenied) e.preventDefault();
-        }}
-      >
+      <DialogContent className="rounded-3xl border-border/40 bg-background/95 backdrop-blur-xl">
         <DialogHeader>
-          <DialogTitle className="font-display text-3xl tracking-wide">
-            {accessDenied ? "Acesso não autorizado" : "Entrar"}
-          </DialogTitle>
+          <DialogTitle className="font-display text-3xl tracking-wide">Entrar</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
-          {accessDenied ? (
-            <div className="space-y-4">
-              <div className="rounded-3xl border border-destructive/40 bg-destructive/10 p-4 space-y-2">
-                <p className="text-sm text-foreground">
-                  Seu email não está na lista de acesso aprovado. Entre em contato com o
-                  administrador.
-                </p>
-              </div>
-              <Button onClick={dismissAccessDenied} size="lg" className="w-full rounded-2xl h-12">
-                Fechar
-              </Button>
-            </div>
-          ) : !sent ? (
+          {!sent ? (
             <>
               <div className="rounded-3xl border border-border/40 bg-white/5 p-4 space-y-2">
                 <p className="text-sm text-foreground">
-                  Para abrir no VLC, faça login com seu email aprovado.
+                  Faça login para liberar o acesso completo.
                 </p>
                 <p className="text-xs text-muted-foreground">
                   Você vai receber um link mágico para entrar sem senha.
