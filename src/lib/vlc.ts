@@ -25,9 +25,27 @@ export async function resolveStreamUrl(opts: {
   const magnet = opts.magnet.trim();
   if (!magnet.startsWith("magnet:?")) throw new Error("invalid_magnet");
 
+  const shorten = async (fileIndex: number) => {
+    try {
+      const res = await fetch(`${base}/shorten`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ magnet, fileIndex }),
+      });
+      if (!res.ok) throw new Error("shorten_failed");
+      const data = (await res.json()) as { url?: string };
+      if (typeof data?.url === "string" && data.url.startsWith("http")) {
+        return data.url;
+      }
+      throw new Error("shorten_failed");
+    } catch {
+      return `${base}/stream?magnet=${encodeURIComponent(magnet)}&index=${fileIndex}`;
+    }
+  };
+
   if (typeof opts.fileIndex === "number") {
     return {
-      streamUrl: `${base}/stream?magnet=${encodeURIComponent(magnet)}&index=${opts.fileIndex}`,
+      streamUrl: await shorten(opts.fileIndex),
       fileIndex: opts.fileIndex,
     };
   }
@@ -38,7 +56,7 @@ export async function resolveStreamUrl(opts: {
   const bestIndex = typeof result.meta.bestVideoIndex === "number" ? result.meta.bestVideoIndex : 0;
 
   return {
-    streamUrl: `${base}/stream?magnet=${encodeURIComponent(magnet)}&index=${bestIndex}`,
+    streamUrl: await shorten(bestIndex),
     fileIndex: bestIndex,
   };
 }

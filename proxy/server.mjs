@@ -101,6 +101,15 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_episodes_show ON episodes(show_tmdb_id);
   CREATE INDEX IF NOT EXISTS idx_movies_added ON movies(added_at DESC);
+
+  CREATE TABLE IF NOT EXISTS short_links (
+    id TEXT PRIMARY KEY,
+    magnet TEXT NOT NULL,
+    file_index INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_short_links_created_at ON short_links(created_at DESC);
 `);
 
 db.exec(`
@@ -1305,7 +1314,7 @@ const server = http.createServer(async (req, res) => {
     const pathname = url.pathname;
 
     if (method === "OPTIONS") {
-      if (pathname.startsWith("/api/")) {
+      if (pathname.startsWith("/api/") || pathname === "/shorten") {
         res.writeHead(204, {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
@@ -1323,6 +1332,64 @@ const server = http.createServer(async (req, res) => {
         "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
         "Access-Control-Max-Age": "86400",
       });
+      res.end();
+      return;
+    }
+
+    if (pathname === "/shorten" && method === "POST") {
+      const body = await readBody(req);
+      const magnet = typeof body?.magnet === "string" ? body.magnet : "";
+      const idx = Number(body?.fileIndex);
+      if (!magnet.startsWith("magnet:?") || magnet.length > 8192) {
+        return json(res, { error: "invalid_magnet" }, 400);
+      }
+      const fileIndex = Number.isFinite(idx) && idx >= 0 ? idx : 0;
+
+      const ttlMs = 24 * 60 * 60 * 1000;
+      try {
+        db.prepare("DELETE FROM short_links WHERE created_at < ?").run(Date.now() - ttlMs);
+      } catch {
+        void 0;
+      }
+
+      let id = "";
+      for (let i = 0; i < 3; i++) {
+        id = crypto.randomBytes(9).toString("base64url");
+        try {
+          db.prepare(
+            "INSERT INTO short_links (id, magnet, file_index, created_at) VALUES (?, ?, ?, ?)",
+          ).run(id, magnet, fileIndex, Date.now());
+          break;
+        } catch {
+          id = "";
+        }
+      }
+
+      if (!id) return json(res, { error: "shorten_failed" }, 500);
+
+      const host = req.headers.host || "localhost";
+      const proto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0] || "http";
+      return json(res, { id, url: `${proto}://${host}/s/${id}` }, 200);
+    }
+
+    if (pathname.startsWith("/s/") && method === "GET") {
+      const id = pathname.slice(3).replace(/[^a-zA-Z0-9_-]/g, "");
+      if (!id) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      const row = db.prepare("SELECT magnet, file_index FROM short_links WHERE id = ?").get(id);
+      if (!row?.magnet) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      const host = req.headers.host || "localhost";
+      const proto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0] || "http";
+      const idx = typeof row.file_index === "number" ? row.file_index : 0;
+      const location = `${proto}://${host}/stream?magnet=${encodeURIComponent(String(row.magnet))}&index=${idx}`;
+      res.writeHead(307, { Location: location });
       res.end();
       return;
     }
