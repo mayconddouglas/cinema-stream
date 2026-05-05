@@ -39,9 +39,11 @@ export async function fetchMetaWithRetry(
     maxAttempts?: number;
     onAttempt?: (attempt: number, max: number) => void;
     signal?: AbortSignal;
+    timeoutMs?: number;
   },
 ): Promise<MetaResult> {
   const maxAttempts = opts?.maxAttempts ?? 3;
+  const timeoutMs = opts?.timeoutMs ?? 40_000;
   const m = magnet.trim();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -58,7 +60,7 @@ export async function fetchMetaWithRetry(
 
     try {
       const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 40_000);
+      const timeout = setTimeout(() => ctrl.abort(), timeoutMs);
 
       const combinedSignal = opts?.signal
         ? abortSignalAny([ctrl.signal, opts.signal])

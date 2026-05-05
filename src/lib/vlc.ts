@@ -59,24 +59,36 @@ export async function resolveStreamUrl(opts: {
     .filter((m, i, arr) => m.startsWith("magnet:?") && arr.indexOf(m) === i);
   if (candidates.length === 0) throw new Error("invalid_magnet");
 
-  const shorten = async (magnet: string, fileIndex: number) => {
-    try {
-      const res = await fetch(`${base}/shorten`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ magnet, fileIndex }),
-      });
-      if (!res.ok) throw new Error("shorten_failed");
-      const data = (await res.json()) as { url?: string };
-      if (typeof data?.url === "string" && data.url.startsWith("http")) {
-        return data.url;
-      }
-      throw new Error("shorten_failed");
-    } catch {
-      return `${base}/stream?magnet=${encodeURIComponent(magnet)}&index=${fileIndex}`;
-    }
-  };
+  const buildDirectStreamUrl = (magnet: string, fileIndex: number) =>
+    `${base}/stream?magnet=${encodeURIComponent(magnet)}&index=${fileIndex}`;
 
+  const primary = candidates[0];
+  // Non-blocking warmup to avoid delaying "Abrir no VLC".
+  void prewarmMagnet(primary);
+
+  // Fast path: when file index is known, open immediately on primary magnet.
+  if (typeof opts.fileIndex === "number" && opts.fileIndex >= 0) {
+    return {
+      streamUrl: buildDirectStreamUrl(primary, opts.fileIndex),
+      fileIndex: opts.fileIndex,
+    };
+  }
+
+  // Fast path for unknown index: quick single metadata probe with short timeout.
+  const quickMeta = await fetchMetaWithRetry(base, primary, {
+    maxAttempts: 1,
+    timeoutMs: 2500,
+  });
+  if (quickMeta.ok) {
+    const bestIndex =
+      typeof quickMeta.meta.bestVideoIndex === "number" ? quickMeta.meta.bestVideoIndex : 0;
+    return {
+      streamUrl: buildDirectStreamUrl(primary, bestIndex),
+      fileIndex: bestIndex,
+    };
+  }
+
+  // Fallback path: rank magnets by health and attempt a deeper resolve.
   const rankedCandidates = await Promise.all(
     candidates.map(async (magnet) => ({ magnet, score: await getSwarmHealth(magnet) })),
   );
@@ -84,16 +96,12 @@ export async function resolveStreamUrl(opts: {
 
   let lastError = "stream_resolve_failed";
   for (const { magnet } of rankedCandidates) {
-    await prewarmMagnet(magnet);
+    void prewarmMagnet(magnet);
 
-    if (typeof opts.fileIndex === "number") {
-      return {
-        streamUrl: await shorten(magnet, opts.fileIndex),
-        fileIndex: opts.fileIndex,
-      };
-    }
-
-    const result = await fetchMetaWithRetry(base, magnet, { maxAttempts: 3 });
+    const result = await fetchMetaWithRetry(base, magnet, {
+      maxAttempts: 2,
+      timeoutMs: 10_000,
+    });
     if (!result.ok) {
       lastError = result.error;
       continue;
@@ -103,11 +111,18 @@ export async function resolveStreamUrl(opts: {
       typeof result.meta.bestVideoIndex === "number" ? result.meta.bestVideoIndex : 0;
 
     return {
-      streamUrl: await shorten(magnet, bestIndex),
+      streamUrl: buildDirectStreamUrl(magnet, bestIndex),
       fileIndex: bestIndex,
     };
   }
 
+  // Last resort: open primary with index 0 to prioritize launch speed.
+  if (primary) {
+    return {
+      streamUrl: buildDirectStreamUrl(primary, 0),
+      fileIndex: 0,
+    };
+  }
   throw new Error(lastError);
 }
 
