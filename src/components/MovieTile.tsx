@@ -22,7 +22,8 @@ export function MovieTile({
   rank?: number;
 }) {
   const progressPct = getProgressPct(item);
-  const showProgress = progressPct > 0 && progressPct < 95;
+  const hasResume = (item.progress ?? 0) > 0;
+  const showProgress = hasResume && (item.duration ? progressPct < 95 : true);
   const isNew = Date.now() - item.addedAt < 1000 * 60 * 60 * 24 * 10;
   const progressMinutes = item.progress ? Math.floor(item.progress / 60) : 0;
 
@@ -93,11 +94,11 @@ export function MovieTile({
       <div className="absolute inset-x-0 bottom-0 p-3 space-y-1">
         <div className="text-sm text-cream font-medium line-clamp-2">{item.title}</div>
         {item.year && <div className="text-[11px] text-muted-foreground">{item.year}</div>}
-        {showProgress && (
+        {showProgress && item.duration ? (
           <div className="h-1 rounded-full bg-white/20 overflow-hidden">
             <div className="h-full bg-primary" style={{ width: `${progressPct}%` }} />
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

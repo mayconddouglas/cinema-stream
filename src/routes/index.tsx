@@ -151,9 +151,13 @@ function HomePage() {
   const continueWatching = useMemo(
     () =>
       items.filter((i) => {
-        if (!i.progress || !i.duration) return false;
-        const pct = (i.progress / i.duration) * 100;
-        return pct > 5 && pct < 95;
+        const progress = i.progress ?? 0;
+        if (progress <= 0) return false;
+        if (i.duration && i.duration > 0) {
+          const pct = (progress / i.duration) * 100;
+          return pct > 2 && pct < 98;
+        }
+        return true;
       }),
     [items],
   );
@@ -166,8 +170,15 @@ function HomePage() {
   const personalized = useMemo(() => rankItemsForUser(items, signals), [items, signals]);
 
   const continueSorted = useMemo(() => {
-    return [...continueWatching].sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
-  }, [continueWatching]);
+    const seed = continueWatching.length
+      ? continueWatching
+      : items.filter((i) => (i.lastPlayedAt ?? 0) > 0 || (i.progress ?? 0) > 0);
+    return [...seed].sort((a, b) => {
+      const aScore = (a.lastPlayedAt ?? 0) + (a.progress ?? 0) * 1000;
+      const bScore = (b.lastPlayedAt ?? 0) + (b.progress ?? 0) * 1000;
+      return bScore - aScore;
+    });
+  }, [continueWatching, items]);
 
   const top10 = useMemo(() => {
     const scored = personalized
@@ -210,7 +221,7 @@ function HomePage() {
   }, [items]);
 
   const becauseWatched = useMemo(() => {
-    const anchor = continueSorted[0] ?? favorites[0] ?? null;
+    const anchor = continueSorted[0] ?? favorites[0] ?? personalized[0] ?? null;
     if (!anchor) return { anchor: null as LibraryItem | null, items: [] as LibraryItem[] };
 
     const normalized = `${anchor.title} ${anchor.description ?? ""}`.toLowerCase();
@@ -243,7 +254,7 @@ function HomePage() {
       .map((entry) => entry.item);
 
     return { anchor, items: scored };
-  }, [continueSorted, favorites, items]);
+  }, [continueSorted, favorites, items, personalized]);
 
   const handlePlay = useCallback(
     (item: LibraryItem) => {
