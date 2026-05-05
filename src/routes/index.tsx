@@ -12,6 +12,13 @@ import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { MovieTile } from "@/components/MovieTile";
 import { useAuth } from "@/components/AuthProvider";
+import {
+  loadHomeSignals,
+  persistHomeSignals,
+  rankItemsForUser,
+  registerHomeEvent,
+  type HomeSignalsState,
+} from "@/lib/homePersonalization";
 import { getSeriesAll, type Series } from "@/lib/series";
 import { getAll, remove, update, type LibraryItem } from "@/lib/storage";
 import { migrateLocalStorageToServer } from "@/lib/api";
@@ -47,6 +54,11 @@ function HomePage() {
   const [migrating, setMigrating] = useState(false);
   const [migrationDone, setMigrationDone] = useState(false);
   const [viewAll, setViewAll] = useState<{ title: string; items: LibraryItem[] } | null>(null);
+  const [signals, setSignals] = useState<HomeSignalsState>({
+    version: 1,
+    updatedAt: 0,
+    signals: {},
+  });
 
   useEffect(() => {
     Promise.all([getAll(), getSeriesAll()]).then(([items, series]) => {
@@ -55,6 +67,17 @@ function HomePage() {
       setLoading(false);
     });
   }, []);
+
+  useEffect(() => {
+    loadHomeSignals().then(setSignals);
+  }, []);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      void persistHomeSignals(signals);
+    }, 700);
+    return () => clearTimeout(timeout);
+  }, [signals]);
 
   useEffect(() => {
     const alreadyMigrated = localStorage.getItem("buffet_migrated_v1");
@@ -81,13 +104,14 @@ function HomePage() {
   );
   const recentlyAdded = useMemo(() => [...items].sort((a, b) => b.addedAt - a.addedAt), [items]);
   const seriesAdded = useMemo(() => [...series].sort((a, b) => b.addedAt - a.addedAt), [series]);
+  const personalized = useMemo(() => rankItemsForUser(items, signals), [items, signals]);
 
   const continueSorted = useMemo(() => {
     return [...continueWatching].sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
   }, [continueWatching]);
 
   const top10 = useMemo(() => {
-    const scored = items
+    const scored = personalized
       .map((item) => {
         const progressPct =
           item.progress && item.duration ? Math.round((item.progress / item.duration) * 100) : 0;
@@ -103,7 +127,7 @@ function HomePage() {
       .slice(0, 10)
       .map((entry) => entry.item);
     return scored;
-  }, [items]);
+  }, [personalized]);
 
   const yearRows = useMemo(() => {
     const map = new Map<string, LibraryItem[]>();
@@ -165,6 +189,7 @@ function HomePage() {
   const handlePlay = useCallback(
     (item: LibraryItem) => {
       toast.message("Abrindo no VLC...");
+      setSignals((prev) => registerHomeEvent(prev, item.id, "play"));
       openVlcWithAuth({
         target: "movie",
         itemId: item.id,
@@ -178,6 +203,7 @@ function HomePage() {
   );
   const handleOpen = useCallback(
     (item: LibraryItem) => {
+      setSignals((prev) => registerHomeEvent(prev, item.id, "open"));
       if (typeof item.tmdbId === "number" && item.tmdbId > 0) {
         navigate({ to: "/filme/$tmdbId", params: { tmdbId: String(item.tmdbId) } });
         return;
@@ -187,6 +213,7 @@ function HomePage() {
     [navigate],
   );
   const handleToggleFav = async (item: LibraryItem) => {
+    setSignals((prev) => registerHomeEvent(prev, item.id, "favorite_toggle"));
     setItems(await update(item.id, { favorite: !item.favorite }));
   };
   const handleDelete = async (item: LibraryItem) => {
@@ -353,6 +380,14 @@ function HomePage() {
             {items.length > 0 && (
               <>
                 <HomeCarouselRow
+                  title="Para você"
+                  items={personalized.slice(0, 18)}
+                  onOpen={handleOpen}
+                  onPlay={handlePlay}
+                  onToggleFav={handleToggleFav}
+                  onViewAll={() => setViewAll({ title: "Para você", items: personalized })}
+                />
+                <HomeCarouselRow
                   title="Continuar assistindo"
                   items={continueSorted}
                   onOpen={handleOpen}
@@ -400,12 +435,12 @@ function HomePage() {
                 </section>
                 <HomeCarouselRow
                   title="Adicionados recentemente"
-                  items={recentlyAdded}
+                  items={personalized.slice(0, 24)}
                   onOpen={handleOpen}
                   onPlay={handlePlay}
                   onToggleFav={handleToggleFav}
                   onViewAll={() =>
-                    setViewAll({ title: "Adicionados recentemente", items: recentlyAdded })
+                    setViewAll({ title: "Adicionados para você", items: personalized })
                   }
                 />
                 {yearRows.map((row) => (
