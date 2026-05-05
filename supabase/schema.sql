@@ -6,6 +6,7 @@ create table if not exists public.profiles (
 
 alter table public.profiles enable row level security;
 
+drop policy if exists "select_own_profile" on public.profiles;
 create policy "select_own_profile"
 on public.profiles
 for select
@@ -19,6 +20,7 @@ create table if not exists public.allowed_emails (
 
 alter table public.allowed_emails enable row level security;
 
+drop policy if exists "select_own_allow" on public.allowed_emails;
 create policy "select_own_allow"
 on public.allowed_emails
 for select
@@ -55,18 +57,21 @@ create table if not exists public.user_cache (
 
 alter table public.user_cache enable row level security;
 
+drop policy if exists "select_own_cache" on public.user_cache;
 create policy "select_own_cache"
 on public.user_cache
 for select
 to authenticated
 using (user_id = auth.uid());
 
+drop policy if exists "upsert_own_cache" on public.user_cache;
 create policy "upsert_own_cache"
 on public.user_cache
 for insert
 to authenticated
 with check (user_id = auth.uid());
 
+drop policy if exists "update_own_cache" on public.user_cache;
 create policy "update_own_cache"
 on public.user_cache
 for update
@@ -74,6 +79,7 @@ to authenticated
 using (user_id = auth.uid())
 with check (user_id = auth.uid());
 
+drop policy if exists "delete_own_cache" on public.user_cache;
 create policy "delete_own_cache"
 on public.user_cache
 for delete
@@ -85,18 +91,21 @@ insert into storage.buckets (id, name, public)
 values ('posters', 'posters', true)
 on conflict (id) do nothing;
 
+drop policy if exists "public_read_posters" on storage.objects;
 create policy "public_read_posters"
 on storage.objects
 for select
 to public
 using (bucket_id = 'posters');
 
+drop policy if exists "auth_upload_posters" on storage.objects;
 create policy "auth_upload_posters"
 on storage.objects
 for insert
 to authenticated
 with check (bucket_id = 'posters');
 
+drop policy if exists "auth_update_posters" on storage.objects;
 create policy "auth_update_posters"
 on storage.objects
 for update
@@ -104,6 +113,7 @@ to authenticated
 using (bucket_id = 'posters')
 with check (bucket_id = 'posters');
 
+drop policy if exists "auth_delete_posters" on storage.objects;
 create policy "auth_delete_posters"
 on storage.objects
 for delete
