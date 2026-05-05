@@ -3,6 +3,7 @@ import { Film, Loader2, Plus } from "lucide-react";
 import { parseMagnet, upsert, type LibraryItem } from "@/lib/storage";
 import { tmdbMovie, tmdbSearch, type TmdbSearchItem } from "@/lib/tmdb";
 import { fetchMetaWithRetry } from "@/lib/torrent";
+import { cacheImageToSupabaseStorage } from "@/lib/mediaAssets";
 
 type DetectedFile = {
   index: number;
@@ -286,12 +287,22 @@ export function AddMagnetDialog({
       typeof singleFileIndex === "number"
         ? `${parsed.infoHash}-f${singleFileIndex}`
         : parsed.infoHash;
+    const assetPrefixBase = `movie/${itemId}`;
+    const cachedPoster = await cacheImageToSupabaseStorage(
+      poster.trim() || undefined,
+      `${assetPrefixBase}-poster`,
+    );
+    const cachedBackdrop = await cacheImageToSupabaseStorage(
+      backdrop.trim() || undefined,
+      `${assetPrefixBase}-backdrop`,
+    );
+
     const item: LibraryItem = {
       id: itemId,
       title: finalTitle,
       magnet,
-      poster: poster.trim() || undefined,
-      backdrop: backdrop.trim() || undefined,
+      poster: cachedPoster || undefined,
+      backdrop: cachedBackdrop || undefined,
       description: description.trim() || undefined,
       year: year.trim() || undefined,
       tmdbId: tmdbSelectedId ?? undefined,

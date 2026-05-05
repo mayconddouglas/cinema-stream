@@ -1,5 +1,6 @@
 import localforage from "localforage";
 import { apiDeleteMovie, apiGetAllMovies, apiPatchMovie, apiUpsertMovie } from "@/lib/api";
+import { getUserCache, setUserCache } from "@/lib/userCache";
 
 export type LibraryItem = {
   id: string;
@@ -24,6 +25,7 @@ const store = localforage.createInstance({
   storeName: "library",
 });
 const CACHE_KEY = "items_cache";
+const USER_CACHE_KEY_MOVIES = "movies_library_v1";
 
 async function setCache(items: LibraryItem[]) {
   try {
@@ -45,8 +47,14 @@ export async function getAll(): Promise<LibraryItem[]> {
   try {
     const items = (await apiGetAllMovies()) as LibraryItem[];
     void setCache(items);
+    void setUserCache<LibraryItem[]>(USER_CACHE_KEY_MOVIES, items);
     return items;
   } catch {
+    const userCache = await getUserCache<LibraryItem[]>(USER_CACHE_KEY_MOVIES);
+    if (Array.isArray(userCache) && userCache.length > 0) {
+      void setCache(userCache);
+      return userCache;
+    }
     return getCache();
   }
 }
