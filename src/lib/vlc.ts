@@ -7,11 +7,17 @@ export function getProxyBase() {
 }
 
 export function getVlcDeepLink(streamUrl: string, startSeconds?: number): string {
-  const timeFragment = startSeconds && startSeconds > 10 ? `#t=${Math.floor(startSeconds)}s` : "";
+  const start = startSeconds && startSeconds > 10 ? Math.floor(startSeconds) : 0;
+  const timeFragment = start > 0 ? `#t=${start}s` : "";
   const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
   const isAndroid = /android/i.test(ua);
   if (isAndroid) {
-    return `intent:${streamUrl}${timeFragment}#Intent;package=org.videolan.vlc;action=android.intent.action.VIEW;type=video/*;end`;
+    const startMs = start > 0 ? start * 1000 : 0;
+    const positionExtras =
+      startMs > 0
+        ? `S.position=${startMs};i.position=${startMs};S.start=${start};i.start=${start};`
+        : "";
+    return `intent:${streamUrl}#Intent;package=org.videolan.vlc;action=android.intent.action.VIEW;type=video/*;${positionExtras}end`;
   }
   return `${streamUrl.replace(/^https?:\/\//, "vlc://")}${timeFragment}`;
 }
@@ -50,6 +56,7 @@ export async function resolveStreamUrl(opts: {
   magnet: string;
   fallbackMagnets?: string[];
   fileIndex?: number | null;
+  preferShort?: boolean;
 }): Promise<{ streamUrl: string; fileIndex: number }> {
   const base = getProxyBase();
   if (!base) throw new Error("proxy_not_configured");
@@ -61,6 +68,25 @@ export async function resolveStreamUrl(opts: {
 
   const buildDirectStreamUrl = (magnet: string, fileIndex: number) =>
     `${base}/stream?magnet=${encodeURIComponent(magnet)}&index=${fileIndex}`;
+  const toShortUrl = async (magnet: string, fileIndex: number, timeoutMs = 900) => {
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${base}/shorten`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ magnet, fileIndex }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { url?: unknown };
+      return typeof data?.url === "string" && data.url.startsWith("http") ? data.url : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
 
   const primary = candidates[0];
   // Non-blocking warmup to avoid delaying "Abrir no VLC".
@@ -68,8 +94,9 @@ export async function resolveStreamUrl(opts: {
 
   // Fast path: when file index is known, open immediately on primary magnet.
   if (typeof opts.fileIndex === "number" && opts.fileIndex >= 0) {
+    const short = opts.preferShort ? await toShortUrl(primary, opts.fileIndex) : null;
     return {
-      streamUrl: buildDirectStreamUrl(primary, opts.fileIndex),
+      streamUrl: short ?? buildDirectStreamUrl(primary, opts.fileIndex),
       fileIndex: opts.fileIndex,
     };
   }
@@ -82,8 +109,9 @@ export async function resolveStreamUrl(opts: {
   if (quickMeta.ok) {
     const bestIndex =
       typeof quickMeta.meta.bestVideoIndex === "number" ? quickMeta.meta.bestVideoIndex : 0;
+    const short = opts.preferShort ? await toShortUrl(primary, bestIndex) : null;
     return {
-      streamUrl: buildDirectStreamUrl(primary, bestIndex),
+      streamUrl: short ?? buildDirectStreamUrl(primary, bestIndex),
       fileIndex: bestIndex,
     };
   }
@@ -109,9 +137,10 @@ export async function resolveStreamUrl(opts: {
 
     const bestIndex =
       typeof result.meta.bestVideoIndex === "number" ? result.meta.bestVideoIndex : 0;
+    const short = opts.preferShort ? await toShortUrl(magnet, bestIndex) : null;
 
     return {
-      streamUrl: buildDirectStreamUrl(magnet, bestIndex),
+      streamUrl: short ?? buildDirectStreamUrl(magnet, bestIndex),
       fileIndex: bestIndex,
     };
   }
@@ -136,6 +165,7 @@ export async function openVlcFromMagnet(opts: {
     magnet: opts.magnet,
     fallbackMagnets: opts.fallbackMagnets,
     fileIndex: opts.fileIndex,
+    preferShort: (opts.startSeconds ?? 0) > 10,
   });
   window.location.href = getVlcDeepLink(streamUrl, opts.startSeconds);
 }
