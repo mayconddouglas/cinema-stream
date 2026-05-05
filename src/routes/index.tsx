@@ -13,6 +13,20 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/u
 import { MovieTile } from "@/components/MovieTile";
 import { useAuth } from "@/components/AuthProvider";
 import {
+  loadHomeExperiment,
+  persistHomeExperiment,
+  registerHomeExperimentClick,
+  registerHomeExposure,
+  type HomeExperimentState,
+} from "@/lib/homeExperiment";
+import {
+  addProfile,
+  loadHomeProfiles,
+  persistHomeProfiles,
+  selectProfile,
+  type HomeProfilesState,
+} from "@/lib/homeProfiles";
+import {
   loadHomeSignals,
   persistHomeSignals,
   rankItemsForUser,
@@ -44,7 +58,7 @@ export const Route = createFileRoute("/")({
 
 function HomePage() {
   const navigate = useNavigate();
-  const { openVlcWithAuth } = useAuth();
+  const { openVlcWithAuth, user } = useAuth();
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [series, setSeries] = useState<Series[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,6 +73,21 @@ function HomePage() {
     updatedAt: 0,
     signals: {},
   });
+  const [signalsHydrated, setSignalsHydrated] = useState(false);
+  const [profiles, setProfiles] = useState<HomeProfilesState>({
+    version: 1,
+    selectedProfileId: "profile_main",
+    profiles: [{ id: "profile_main", name: "Principal", color: "#f97316", createdAt: Date.now() }],
+    updatedAt: 0,
+  });
+  const [experiment, setExperiment] = useState<HomeExperimentState>({
+    version: 1,
+    variant: "control",
+    assignedAt: 0,
+    exposureCount: 0,
+    clickCount: 0,
+    updatedAt: 0,
+  });
 
   useEffect(() => {
     Promise.all([getAll(), getSeriesAll()]).then(([items, series]) => {
@@ -69,15 +98,45 @@ function HomePage() {
   }, []);
 
   useEffect(() => {
-    loadHomeSignals().then(setSignals);
+    loadHomeProfiles().then(setProfiles);
   }, []);
 
   useEffect(() => {
+    const seed = user?.id ?? user?.email ?? "anon";
+    loadHomeExperiment(seed).then((state) => setExperiment(registerHomeExposure(state)));
+  }, [user?.email, user?.id]);
+
+  useEffect(() => {
+    if (!profiles.selectedProfileId) return;
+    setSignalsHydrated(false);
+    loadHomeSignals({ profileId: profiles.selectedProfileId }).then((state) => {
+      setSignals(state);
+      setSignalsHydrated(true);
+    });
+  }, [profiles.selectedProfileId]);
+
+  useEffect(() => {
+    if (!signalsHydrated || !profiles.selectedProfileId) return;
     const timeout = setTimeout(() => {
-      void persistHomeSignals(signals);
+      void persistHomeSignals(signals, { profileId: profiles.selectedProfileId });
     }, 700);
     return () => clearTimeout(timeout);
-  }, [signals]);
+  }, [profiles.selectedProfileId, signals, signalsHydrated]);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      void persistHomeProfiles(profiles);
+    }, 700);
+    return () => clearTimeout(timeout);
+  }, [profiles]);
+
+  useEffect(() => {
+    if (!experiment.assignedAt) return;
+    const timeout = setTimeout(() => {
+      void persistHomeExperiment(experiment);
+    }, 700);
+    return () => clearTimeout(timeout);
+  }, [experiment]);
 
   useEffect(() => {
     const alreadyMigrated = localStorage.getItem("buffet_migrated_v1");
@@ -222,14 +281,15 @@ function HomePage() {
   };
 
   const heroSlides = useMemo(() => {
-    const picks = [...continueSorted, ...favorites, ...recentlyAdded].reduce<LibraryItem[]>(
-      (acc, cur) => {
-        if (acc.some((i) => i.id === cur.id)) return acc;
-        acc.push(cur);
-        return acc;
-      },
-      [],
-    );
+    const heroPool =
+      experiment.variant === "hero_personalized_first"
+        ? [...personalized, ...continueSorted, ...favorites, ...recentlyAdded]
+        : [...continueSorted, ...favorites, ...recentlyAdded, ...personalized];
+    const picks = heroPool.reduce<LibraryItem[]>((acc, cur) => {
+      if (acc.some((i) => i.id === cur.id)) return acc;
+      acc.push(cur);
+      return acc;
+    }, []);
     const slides: HeroSlide[] = [];
     for (const item of picks.slice(0, 5)) {
       const img = item.backdrop ?? item.poster ?? "";
@@ -256,7 +316,15 @@ function HomePage() {
       });
     }
     return slides;
-  }, [continueSorted, favorites, handleOpen, handlePlay, recentlyAdded]);
+  }, [
+    continueSorted,
+    experiment.variant,
+    favorites,
+    handleOpen,
+    handlePlay,
+    personalized,
+    recentlyAdded,
+  ]);
 
   const handleMigrate = async () => {
     setMigrating(true);
@@ -364,17 +432,64 @@ function HomePage() {
                 <Sparkles className="h-4 w-4 text-primary shrink-0 mt-1" />
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
-                <Button onClick={() => navigate({ to: "/buscar" })} className="rounded-2xl">
+                <Button
+                  onClick={() => {
+                    setExperiment((prev) => registerHomeExperimentClick(prev));
+                    navigate({ to: "/buscar" });
+                  }}
+                  className="rounded-2xl"
+                >
                   <Search className="h-4 w-4" />
                   Explorar catálogo
                 </Button>
                 <Button
                   variant="secondary"
-                  onClick={() => navigate({ to: "/buscar" })}
+                  onClick={() => {
+                    setExperiment((prev) => registerHomeExperimentClick(prev));
+                    navigate({ to: "/buscar" });
+                  }}
                   className="rounded-2xl"
                 >
                   Ver em alta
                 </Button>
+              </div>
+            </section>
+            <section className="rounded-2xl border border-border/40 bg-white/[0.03] p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs uppercase tracking-wider text-muted-foreground">Perfis</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const input = window.prompt("Nome do novo perfil (até 16 caracteres):");
+                    if (!input) return;
+                    setProfiles((prev) => addProfile(prev, input));
+                  }}
+                  className="text-xs text-primary hover:underline"
+                >
+                  + Novo perfil
+                </button>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {profiles.profiles.map((profile) => {
+                  const active = profile.id === profiles.selectedProfileId;
+                  return (
+                    <button
+                      key={profile.id}
+                      onClick={() => setProfiles((prev) => selectProfile(prev, profile.id))}
+                      className={
+                        active
+                          ? "rounded-full border border-primary/30 bg-primary/20 px-3 py-1.5 text-xs text-primary"
+                          : "rounded-full border border-border/50 bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                      }
+                    >
+                      <span
+                        className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle"
+                        style={{ backgroundColor: profile.color }}
+                      />
+                      {profile.name}
+                    </button>
+                  );
+                })}
               </div>
             </section>
             {items.length > 0 && (

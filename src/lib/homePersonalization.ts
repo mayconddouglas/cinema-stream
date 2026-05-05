@@ -17,8 +17,12 @@ export type HomeSignalsState = {
   signals: Record<string, ItemSignal>;
 };
 
-const LOCAL_KEY = "acervos_home_signals_v1";
-const USER_CACHE_KEY = "home_signals_v1";
+export type HomeSignalScope = {
+  profileId?: string;
+};
+
+const LOCAL_KEY_BASE = "acervos_home_signals_v1";
+const USER_CACHE_KEY_BASE = "home_signals_v1";
 
 function createEmptyState(): HomeSignalsState {
   return {
@@ -28,9 +32,9 @@ function createEmptyState(): HomeSignalsState {
   };
 }
 
-function readLocalSignals(): HomeSignalsState {
+function readLocalSignals(localKey: string): HomeSignalsState {
   try {
-    const raw = localStorage.getItem(LOCAL_KEY);
+    const raw = localStorage.getItem(localKey);
     if (!raw) return createEmptyState();
     const parsed = JSON.parse(raw) as Partial<HomeSignalsState>;
     if (!parsed || parsed.version !== 1 || typeof parsed.signals !== "object") {
@@ -68,9 +72,18 @@ function mergeSignals(
   return merged;
 }
 
-export async function loadHomeSignals(): Promise<HomeSignalsState> {
-  const local = readLocalSignals();
-  const user = await getUserCache<HomeSignalsState>(USER_CACHE_KEY);
+function buildScopedKeys(scope?: HomeSignalScope) {
+  const suffix = scope?.profileId ? `_${scope.profileId}` : "_default";
+  return {
+    localKey: `${LOCAL_KEY_BASE}${suffix}`,
+    userKey: `${USER_CACHE_KEY_BASE}${suffix}`,
+  };
+}
+
+export async function loadHomeSignals(scope?: HomeSignalScope): Promise<HomeSignalsState> {
+  const keys = buildScopedKeys(scope);
+  const local = readLocalSignals(keys.localKey);
+  const user = await getUserCache<HomeSignalsState>(keys.userKey);
   if (!user || user.version !== 1 || typeof user.signals !== "object") return local;
   return {
     version: 1,
@@ -109,16 +122,36 @@ export function registerHomeEvent(
   };
 }
 
-export async function persistHomeSignals(state: HomeSignalsState): Promise<void> {
+export async function persistHomeSignals(
+  state: HomeSignalsState,
+  scope?: HomeSignalScope,
+): Promise<void> {
+  const keys = buildScopedKeys(scope);
   try {
-    localStorage.setItem(LOCAL_KEY, JSON.stringify(state));
+    localStorage.setItem(keys.localKey, JSON.stringify(state));
   } catch {
     void 0;
   }
-  await setUserCache<HomeSignalsState>(USER_CACHE_KEY, state);
+  await setUserCache<HomeSignalsState>(keys.userKey, state);
 }
 
 export function rankItemsForUser(items: LibraryItem[], signals: HomeSignalsState): LibraryItem[] {
+  const itemById = new Map(items.map((item) => [item.id, item]));
+  const likedItems = Object.values(signals.signals)
+    .sort((a, b) => b.plays * 2 + b.opens - (a.plays * 2 + a.opens))
+    .slice(0, 8)
+    .map((signal) => itemById.get(signal.itemId))
+    .filter(Boolean) as LibraryItem[];
+
+  const tokenPrefs = new Map<string, number>();
+  for (const item of likedItems) {
+    const text = `${item.title} ${item.description ?? ""}`.toLowerCase();
+    const tokens = text.split(/[^a-z0-9à-ÿ]+/i).filter((t) => t.length >= 4);
+    for (const token of tokens.slice(0, 10)) {
+      tokenPrefs.set(token, (tokenPrefs.get(token) ?? 0) + 1);
+    }
+  }
+
   return [...items]
     .map((item) => {
       const signal = signals.signals[item.id];
@@ -137,8 +170,21 @@ export function rankItemsForUser(items: LibraryItem[], signals: HomeSignalsState
       const interactionScore = signal
         ? (signal.opens * 18 + signal.plays * 34 + signal.favorites * 16) * signalRecencyFactor
         : 0;
+      let contentAffinityScore = 0;
+      if (tokenPrefs.size > 0) {
+        const text = `${item.title} ${item.description ?? ""}`.toLowerCase();
+        for (const [token, weight] of tokenPrefs) {
+          if (text.includes(token)) contentAffinityScore += weight * 2.4;
+        }
+      }
 
-      const score = recencyScore + continueScore + favoriteScore + activityScore + interactionScore;
+      const score =
+        recencyScore +
+        continueScore +
+        favoriteScore +
+        activityScore +
+        interactionScore +
+        contentAffinityScore;
       return { item, score };
     })
     .sort((a, b) => b.score - a.score)
