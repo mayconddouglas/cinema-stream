@@ -16,16 +16,50 @@ export function getVlcDeepLink(streamUrl: string, startSeconds?: number): string
   return `${streamUrl.replace(/^https?:\/\//, "vlc://")}${timeFragment}`;
 }
 
+export async function prewarmMagnet(magnet: string): Promise<void> {
+  const base = getProxyBase();
+  if (!base) return;
+  try {
+    await fetch(`${base}/prewarm`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ magnet }),
+    });
+  } catch {
+    void 0;
+  }
+}
+
+export async function getSwarmHealth(magnet: string): Promise<number> {
+  const base = getProxyBase();
+  if (!base) return -1;
+  try {
+    const url = new URL(`${base}/swarm-health`);
+    url.searchParams.set("magnet", magnet);
+    const res = await fetch(url.toString());
+    if (!res.ok) return -1;
+    const data = (await res.json()) as { score?: unknown };
+    const score = typeof data.score === "number" ? data.score : -1;
+    return Number.isFinite(score) ? score : -1;
+  } catch {
+    return -1;
+  }
+}
+
 export async function resolveStreamUrl(opts: {
   magnet: string;
+  fallbackMagnets?: string[];
   fileIndex?: number | null;
 }): Promise<{ streamUrl: string; fileIndex: number }> {
   const base = getProxyBase();
   if (!base) throw new Error("proxy_not_configured");
-  const magnet = opts.magnet.trim();
-  if (!magnet.startsWith("magnet:?")) throw new Error("invalid_magnet");
 
-  const shorten = async (fileIndex: number) => {
+  const candidates = [opts.magnet, ...(opts.fallbackMagnets ?? [])]
+    .map((m) => m.trim())
+    .filter((m, i, arr) => m.startsWith("magnet:?") && arr.indexOf(m) === i);
+  if (candidates.length === 0) throw new Error("invalid_magnet");
+
+  const shorten = async (magnet: string, fileIndex: number) => {
     try {
       const res = await fetch(`${base}/shorten`, {
         method: "POST",
@@ -43,29 +77,50 @@ export async function resolveStreamUrl(opts: {
     }
   };
 
-  if (typeof opts.fileIndex === "number") {
+  const rankedCandidates = await Promise.all(
+    candidates.map(async (magnet) => ({ magnet, score: await getSwarmHealth(magnet) })),
+  );
+  rankedCandidates.sort((a, b) => b.score - a.score);
+
+  let lastError = "stream_resolve_failed";
+  for (const { magnet } of rankedCandidates) {
+    await prewarmMagnet(magnet);
+
+    if (typeof opts.fileIndex === "number") {
+      return {
+        streamUrl: await shorten(magnet, opts.fileIndex),
+        fileIndex: opts.fileIndex,
+      };
+    }
+
+    const result = await fetchMetaWithRetry(base, magnet, { maxAttempts: 3 });
+    if (!result.ok) {
+      lastError = result.error;
+      continue;
+    }
+
+    const bestIndex =
+      typeof result.meta.bestVideoIndex === "number" ? result.meta.bestVideoIndex : 0;
+
     return {
-      streamUrl: await shorten(opts.fileIndex),
-      fileIndex: opts.fileIndex,
+      streamUrl: await shorten(magnet, bestIndex),
+      fileIndex: bestIndex,
     };
   }
 
-  const result = await fetchMetaWithRetry(base, magnet, { maxAttempts: 3 });
-  if (!result.ok) throw new Error(result.error);
-
-  const bestIndex = typeof result.meta.bestVideoIndex === "number" ? result.meta.bestVideoIndex : 0;
-
-  return {
-    streamUrl: await shorten(bestIndex),
-    fileIndex: bestIndex,
-  };
+  throw new Error(lastError);
 }
 
 export async function openVlcFromMagnet(opts: {
   magnet: string;
+  fallbackMagnets?: string[];
   fileIndex?: number | null;
   startSeconds?: number;
 }) {
-  const { streamUrl } = await resolveStreamUrl({ magnet: opts.magnet, fileIndex: opts.fileIndex });
+  const { streamUrl } = await resolveStreamUrl({
+    magnet: opts.magnet,
+    fallbackMagnets: opts.fallbackMagnets,
+    fileIndex: opts.fileIndex,
+  });
   window.location.href = getVlcDeepLink(streamUrl, opts.startSeconds);
 }

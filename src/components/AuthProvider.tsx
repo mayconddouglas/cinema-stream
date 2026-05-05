@@ -12,6 +12,7 @@ type AuthContextValue = {
   requireAuth: (action: () => void | Promise<void>) => void;
   openVlcWithAuth: (opts: {
     magnet: string;
+    fallbackMagnets?: string[];
     fileIndex?: number | null;
     startSeconds?: number;
   }) => void;
@@ -28,7 +29,12 @@ type PendingAction = {
 type PendingStoredAction =
   | {
       type: "open_vlc";
-      payload: { magnet: string; fileIndex?: number | null; startSeconds?: number };
+      payload: {
+        magnet: string;
+        fallbackMagnets?: string[];
+        fileIndex?: number | null;
+        startSeconds?: number;
+      };
     }
   | { type: "none" };
 
@@ -97,7 +103,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const openVlcWithAuth = useCallback(
-    (opts: { magnet: string; fileIndex?: number | null; startSeconds?: number }) => {
+    (opts: {
+      magnet: string;
+      fallbackMagnets?: string[];
+      fileIndex?: number | null;
+      startSeconds?: number;
+    }) => {
       try {
         const stored: PendingStoredAction = { type: "open_vlc", payload: opts };
         localStorage.setItem(PENDING_KEY, JSON.stringify(stored));

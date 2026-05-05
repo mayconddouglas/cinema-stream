@@ -1273,6 +1273,51 @@ function setCachedExtractedSubtitle(magnet, trackIndex, vtt) {
   subtitleExtractCache.set(k, { ts: Date.now(), data: vtt });
 }
 
+function getOrCreateTorrent(magnet) {
+  let torrent = torrents.get(magnet);
+  if (!torrent) {
+    const announce = Array.from(new Set([...DEFAULT_ANNOUNCE, ...EXTRA_TRACKERS]));
+    torrent = client.add(magnet, { announce });
+    torrent.__lastAccess = Date.now();
+    torrents.set(magnet, torrent);
+    torrent.on("done", () => {
+      torrent.__doneAt = Date.now();
+    });
+  } else {
+    torrent.__lastAccess = Date.now();
+  }
+  return torrent;
+}
+
+function getTorrentHealth(torrent) {
+  const peers = Number(torrent?.numPeers ?? 0);
+  const progress = Number(torrent?.progress ?? 0);
+  const downloadSpeed = Number(torrent?.downloadSpeed ?? 0);
+  const ready = !!torrent?.ready;
+  const done = !!torrent?.done;
+  const speedMbps = downloadSpeed > 0 ? downloadSpeed / (1024 * 1024) : 0;
+
+  const peerScore = Math.min(60, peers * 12);
+  const speedScore = Math.min(20, speedMbps * 20);
+  const progressScore = Math.min(20, progress * 20);
+  const readyBonus = ready ? 10 : 0;
+  const rawScore = peerScore + speedScore + progressScore + readyBonus;
+  const score = Math.max(0, Math.min(100, Math.round(rawScore)));
+
+  const tier = score >= 80 ? "excellent" : score >= 55 ? "good" : score >= 30 ? "fair" : "poor";
+
+  return {
+    ready,
+    done,
+    peers,
+    progress,
+    downloadSpeed,
+    speedMbps: Number(speedMbps.toFixed(2)),
+    score,
+    tier,
+  };
+}
+
 function cleanupTorrents() {
   const now = Date.now();
   const maxIdleMs = 10 * 60 * 1000;
@@ -1281,6 +1326,8 @@ function cleanupTorrents() {
   for (const [key, t] of torrents.entries()) {
     const lastAccess = typeof t.__lastAccess === "number" ? t.__lastAccess : now;
     const doneAt = typeof t.__doneAt === "number" ? t.__doneAt : 0;
+    const keepWarmUntil = typeof t.__keepWarmUntil === "number" ? t.__keepWarmUntil : 0;
+    if (keepWarmUntil > now) continue;
     const idleMs = now - lastAccess;
     const doneMs = doneAt ? now - doneAt : 0;
     if (idleMs > maxIdleMs || (doneAt && doneMs > maxDoneMs)) {
@@ -1291,7 +1338,7 @@ function cleanupTorrents() {
     }
   }
 
-  const maxEntries = 3;
+  const maxEntries = 8;
   if (torrents.size > maxEntries) {
     const entries = [...torrents.entries()].sort(
       (a, b) => (a[1].__lastAccess ?? 0) - (b[1].__lastAccess ?? 0),
@@ -1314,7 +1361,7 @@ const server = http.createServer(async (req, res) => {
     const pathname = url.pathname;
 
     if (method === "OPTIONS") {
-      if (pathname.startsWith("/api/") || pathname === "/shorten") {
+      if (pathname.startsWith("/api/") || pathname === "/shorten" || pathname === "/prewarm") {
         res.writeHead(204, {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
@@ -1370,6 +1417,85 @@ const server = http.createServer(async (req, res) => {
       const host = req.headers.host || "localhost";
       const proto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0] || "http";
       return json(res, { id, url: `${proto}://${host}/s/${id}` }, 200);
+    }
+
+    if (pathname === "/swarm-health" && method === "GET") {
+      const magnet = (url.searchParams.get("magnet") || "").trim();
+      if (!magnet.startsWith("magnet:?") || magnet.length > 8192) {
+        return json(res, { error: "invalid_magnet" }, 400);
+      }
+      cleanupTorrents();
+      const torrent = getOrCreateTorrent(magnet);
+      try {
+        await waitForReady(torrent, 8_000);
+      } catch {
+        void 0;
+      }
+      return json(res, getTorrentHealth(torrent), 200);
+    }
+
+    if (pathname === "/prewarm" && method === "POST") {
+      const body = await readBody(req);
+      const magnet = typeof body?.magnet === "string" ? body.magnet.trim() : "";
+      const ttlSecRaw = Number(body?.ttlSeconds);
+      const ttlSec = Number.isFinite(ttlSecRaw) ? Math.max(120, Math.min(7200, ttlSecRaw)) : 900;
+      if (!magnet.startsWith("magnet:?") || magnet.length > 8192) {
+        return json(res, { error: "invalid_magnet" }, 400);
+      }
+
+      cleanupTorrents();
+      const torrent = getOrCreateTorrent(magnet);
+      torrent.__keepWarmUntil = Date.now() + ttlSec * 1000;
+      try {
+        await waitForReady(torrent, 45_000);
+      } catch {
+        return json(
+          res,
+          {
+            ok: false,
+            error: "metadata_timeout",
+            health: getTorrentHealth(torrent),
+          },
+          504,
+        );
+      }
+
+      const indexRaw = Number(body?.index);
+      const indexed =
+        Number.isFinite(indexRaw) && indexRaw >= 0 && indexRaw < (torrent.files?.length ?? 0)
+          ? torrent.files[indexRaw]
+          : null;
+      const file = indexed && VIDEO_RE.test(indexed.name) ? indexed : pickVideoFile(torrent);
+      if (!file) {
+        return json(
+          res,
+          { ok: false, error: "no_video_file", health: getTorrentHealth(torrent) },
+          422,
+        );
+      }
+
+      const sampleSize = 2 * 1024 * 1024;
+      const end = Math.max(0, Math.min((Number(file.length) || 0) - 1, sampleSize - 1));
+      if (end > 0) {
+        await new Promise((resolve) => {
+          const s = file.createReadStream({ start: 0, end });
+          s.on("data", () => {});
+          s.on("error", () => resolve());
+          s.on("end", () => resolve());
+        });
+      }
+
+      return json(
+        res,
+        {
+          ok: true,
+          keepWarmUntil: torrent.__keepWarmUntil,
+          fileName: file.name,
+          warmedBytes: end > 0 ? end + 1 : 0,
+          health: getTorrentHealth(torrent),
+        },
+        200,
+      );
     }
 
     if (pathname.startsWith("/s/") && method === "GET") {
@@ -1937,6 +2063,7 @@ const server = http.createServer(async (req, res) => {
       pathname !== "/stream" &&
       pathname !== "/stream-audio" &&
       pathname !== "/meta" &&
+      pathname !== "/swarm-health" &&
       pathname !== "/file" &&
       pathname !== "/probe" &&
       pathname !== "/extract-audio" &&
@@ -2319,18 +2446,7 @@ const server = http.createServer(async (req, res) => {
 
     cleanupTorrents();
 
-    let torrent = torrents.get(magnet);
-    if (!torrent) {
-      const announce = Array.from(new Set([...DEFAULT_ANNOUNCE, ...EXTRA_TRACKERS]));
-      torrent = client.add(magnet, { announce });
-      torrent.__lastAccess = Date.now();
-      torrents.set(magnet, torrent);
-      torrent.on("done", () => {
-        torrent.__doneAt = Date.now();
-      });
-    } else {
-      torrent.__lastAccess = Date.now();
-    }
+    const torrent = getOrCreateTorrent(magnet);
 
     try {
       const readyTimeout =

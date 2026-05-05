@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/AuthProvider";
 import { getAll, type LibraryItem } from "@/lib/storage";
 import { tmdbMovie, type TmdbSearchItem } from "@/lib/tmdb";
+import { prewarmMagnet } from "@/lib/vlc";
 
 type Tab = "about" | "cast" | "similar";
 
@@ -32,6 +33,11 @@ function MovieDetailsPage() {
   useEffect(() => {
     getAll().then(setItems);
   }, []);
+
+  useEffect(() => {
+    if (!inLibrary?.magnet) return;
+    void prewarmMagnet(inLibrary.magnet);
+  }, [inLibrary?.magnet]);
 
   const inLibrary = useMemo(
     () => items.find((i) => i.tmdbId === data.id) ?? null,
