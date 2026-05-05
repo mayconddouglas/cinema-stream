@@ -93,9 +93,12 @@ function FavoritesPage() {
                 }}
                 onPlay={(it) => {
                   openVlcWithAuth({
+                    target: "movie",
+                    itemId: it.id,
                     magnet: it.magnet,
                     fileIndex: it.fileIndex,
                     startSeconds: it.progress ?? 0,
+                    durationSeconds: it.duration,
                   });
                 }}
                 onToggleFav={handleToggleFav}
@@ -123,9 +126,12 @@ function FavoritesPage() {
         onPlay={(item) => {
           setDetails(null);
           openVlcWithAuth({
+            target: "movie",
+            itemId: item.id,
             magnet: item.magnet,
             fileIndex: item.fileIndex,
             startSeconds: item.progress ?? 0,
+            durationSeconds: item.duration,
           });
         }}
         onToggleFav={handleToggleFav}

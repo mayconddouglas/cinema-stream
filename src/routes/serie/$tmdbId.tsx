@@ -945,9 +945,15 @@ function SeriesDetailsPage() {
                                 if (!canPlay || !local?.magnet) return;
                                 setOpeningVlcFor(local.id);
                                 openVlcWithAuth({
+                                  target: "episode",
+                                  itemId: local.id,
                                   magnet: local.magnet,
                                   fileIndex: local.fileIndex ?? undefined,
                                   startSeconds: local.progress ?? 0,
+                                  durationSeconds:
+                                    typeof ep.runtime === "number" && ep.runtime > 0
+                                      ? ep.runtime * 60
+                                      : undefined,
                                 });
                                 setTimeout(() => setOpeningVlcFor(null), 800);
                               }}

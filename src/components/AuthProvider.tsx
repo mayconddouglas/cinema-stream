@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { AuthDialog } from "@/components/AuthDialog";
 import { openVlcFromMagnet } from "@/lib/vlc";
+import { commitVlcResumeOnReturn, markVlcLaunchSession } from "@/lib/vlcResume";
 
 type AuthContextValue = {
   user: User | null;
@@ -11,10 +12,13 @@ type AuthContextValue = {
   isAllowed: boolean;
   requireAuth: (action: () => void | Promise<void>) => void;
   openVlcWithAuth: (opts: {
+    target: "movie" | "episode";
+    itemId: string;
     magnet: string;
     fallbackMagnets?: string[];
     fileIndex?: number | null;
     startSeconds?: number;
+    durationSeconds?: number;
   }) => void;
   signOut: () => Promise<void>;
 };
@@ -30,10 +34,13 @@ type PendingStoredAction =
   | {
       type: "open_vlc";
       payload: {
+        target: "movie" | "episode";
+        itemId: string;
         magnet: string;
         fallbackMagnets?: string[];
         fileIndex?: number | null;
         startSeconds?: number;
+        durationSeconds?: number;
       };
     }
   | { type: "none" };
@@ -65,6 +72,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setIsAllowed(Boolean(user));
   }, [user]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void commitVlcResumeOnReturn();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    void commitVlcResumeOnReturn();
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
 
   const signOut = useCallback(async () => {
     if (!supabase) return;
@@ -104,10 +121,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const openVlcWithAuth = useCallback(
     (opts: {
+      target: "movie" | "episode";
+      itemId: string;
       magnet: string;
       fallbackMagnets?: string[];
       fileIndex?: number | null;
       startSeconds?: number;
+      durationSeconds?: number;
     }) => {
       try {
         const stored: PendingStoredAction = { type: "open_vlc", payload: opts };
@@ -121,6 +141,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } catch {
           void 0;
         }
+        markVlcLaunchSession({
+          target: opts.target,
+          id: opts.itemId,
+          startSeconds: opts.startSeconds,
+          durationSeconds: opts.durationSeconds,
+        });
         await openVlcFromMagnet(opts);
       });
     },
@@ -148,6 +174,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       void 0;
     }
+    markVlcLaunchSession({
+      target: parsed.payload.target,
+      id: parsed.payload.itemId,
+      startSeconds: parsed.payload.startSeconds,
+      durationSeconds: parsed.payload.durationSeconds,
+    });
     openVlcFromMagnet(parsed.payload).catch(() => toast.error("Não foi possível abrir no VLC."));
   }, [isAllowed, user]);
 

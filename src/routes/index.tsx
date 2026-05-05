@@ -111,9 +111,12 @@ function HomePage() {
     (item: LibraryItem) => {
       toast.message("Abrindo no VLC...");
       openVlcWithAuth({
+        target: "movie",
+        itemId: item.id,
         magnet: item.magnet,
         fileIndex: item.fileIndex,
         startSeconds: item.progress ?? 0,
+        durationSeconds: item.duration,
       });
     },
     [openVlcWithAuth],

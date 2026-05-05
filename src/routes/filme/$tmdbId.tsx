@@ -70,9 +70,13 @@ function MovieDetailsPage() {
     setOpeningVlc(true);
     setVlcError(null);
     openVlcWithAuth({
+      target: "movie",
+      itemId: inLibrary.id,
       magnet: inLibrary.magnet,
       fileIndex: inLibrary.fileIndex,
       startSeconds: inLibrary.progress ?? 0,
+      durationSeconds:
+        typeof data.runtime === "number" && data.runtime > 0 ? data.runtime * 60 : undefined,
     });
     setTimeout(() => setOpeningVlc(false), 800);
   };
