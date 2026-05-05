@@ -15,6 +15,7 @@ export function HomeCarouselRow({
   onPlay,
   onToggleFav,
   onViewAll,
+  showRanking = false,
 }: {
   title: string;
   items: LibraryItem[];
@@ -22,6 +23,7 @@ export function HomeCarouselRow({
   onPlay: (item: LibraryItem) => void;
   onToggleFav?: (item: LibraryItem) => void;
   onViewAll?: () => void;
+  showRanking?: boolean;
 }) {
   if (items.length === 0) return null;
 
@@ -42,12 +44,18 @@ export function HomeCarouselRow({
       <div className="relative">
         <Carousel opts={{ align: "start", dragFree: true }}>
           <CarouselContent className="-ml-3">
-            {items.map((item) => (
+            {items.map((item, idx) => (
               <CarouselItem
                 key={item.id}
                 className="pl-3 basis-[44%] sm:basis-[28%] md:basis-[20%] lg:basis-[16%] xl:basis-[14%]"
               >
-                <MovieTile item={item} onOpen={onOpen} onPlay={onPlay} onToggleFav={onToggleFav} />
+                <MovieTile
+                  item={item}
+                  onOpen={onOpen}
+                  onPlay={onPlay}
+                  onToggleFav={onToggleFav}
+                  rank={showRanking ? idx + 1 : undefined}
+                />
               </CarouselItem>
             ))}
           </CarouselContent>

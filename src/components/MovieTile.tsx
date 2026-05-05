@@ -13,14 +13,18 @@ export function MovieTile({
   onOpen,
   onPlay,
   onToggleFav,
+  rank,
 }: {
   item: LibraryItem;
   onOpen: (item: LibraryItem) => void;
   onPlay: (item: LibraryItem) => void;
   onToggleFav?: (item: LibraryItem) => void;
+  rank?: number;
 }) {
   const progressPct = getProgressPct(item);
   const showProgress = progressPct > 0 && progressPct < 95;
+  const isNew = Date.now() - item.addedAt < 1000 * 60 * 60 * 24 * 10;
+  const progressMinutes = item.progress ? Math.floor(item.progress / 60) : 0;
 
   return (
     <div
@@ -41,6 +45,24 @@ export function MovieTile({
       )}
 
       <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/20 to-transparent opacity-80 group-hover:opacity-100 transition-opacity" />
+
+      <div className="absolute top-2 left-2 z-[1] flex flex-col gap-1">
+        {typeof rank === "number" && rank > 0 ? (
+          <span className="inline-flex w-fit rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
+            TOP {rank}
+          </span>
+        ) : null}
+        {showProgress ? (
+          <span className="inline-flex w-fit rounded-full border border-border/40 bg-black/55 px-2 py-0.5 text-[10px] text-cream">
+            Retomar {progressMinutes}m
+          </span>
+        ) : null}
+        {!showProgress && isNew ? (
+          <span className="inline-flex w-fit rounded-full border border-emerald-400/30 bg-emerald-500/20 px-2 py-0.5 text-[10px] text-emerald-300">
+            Novo
+          </span>
+        ) : null}
+      </div>
 
       {onToggleFav ? (
         <button

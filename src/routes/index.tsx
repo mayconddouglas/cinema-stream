@@ -86,6 +86,25 @@ function HomePage() {
     return [...continueWatching].sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
   }, [continueWatching]);
 
+  const top10 = useMemo(() => {
+    const scored = items
+      .map((item) => {
+        const progressPct =
+          item.progress && item.duration ? Math.round((item.progress / item.duration) * 100) : 0;
+        const recencyHours = Math.max(1, (Date.now() - item.addedAt) / (1000 * 60 * 60));
+        const recencyScore = 120 / Math.sqrt(recencyHours);
+        const favoriteScore = item.favorite ? 35 : 0;
+        const continueScore = progressPct > 5 && progressPct < 95 ? 30 : 0;
+        const activityScore = item.lastPlayedAt ? 40 : 0;
+        const score = recencyScore + favoriteScore + continueScore + activityScore;
+        return { item, score };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10)
+      .map((entry) => entry.item);
+    return scored;
+  }, [items]);
+
   const yearRows = useMemo(() => {
     const map = new Map<string, LibraryItem[]>();
     for (const item of items) {
@@ -140,23 +159,41 @@ function HomePage() {
   };
 
   const heroSlides = useMemo(() => {
-    const picks = recentlyAdded.slice(0, 5);
+    const picks = [...continueSorted, ...favorites, ...recentlyAdded].reduce<LibraryItem[]>(
+      (acc, cur) => {
+        if (acc.some((i) => i.id === cur.id)) return acc;
+        acc.push(cur);
+        return acc;
+      },
+      [],
+    );
     const slides: HeroSlide[] = [];
-    for (const item of picks) {
+    for (const item of picks.slice(0, 5)) {
       const img = item.backdrop ?? item.poster ?? "";
+      const progressPct =
+        item.progress && item.duration ? Math.round((item.progress / item.duration) * 100) : 0;
+      const isContinue = progressPct > 5 && progressPct < 95;
+      const isNew = Date.now() - item.addedAt < 1000 * 60 * 60 * 24 * 10;
+      const minutes = item.duration ? Math.round(item.duration / 60) : null;
+      const subtitleBits = [
+        item.year,
+        minutes && minutes > 0 ? `${minutes} min` : null,
+        isContinue ? `${progressPct}% assistido` : null,
+      ].filter(Boolean);
       slides.push({
         key: item.id,
         title: item.title,
-        subtitle: item.year ? `${item.year}` : undefined,
+        subtitle: subtitleBits.join(" • ") || item.description || undefined,
         image: img || undefined,
-        badge: "Biblioteca",
+        badge: isContinue ? "Continue assistindo" : isNew ? "Novo na sua biblioteca" : "Em alta",
         onPlay: () => handlePlay(item),
         onSecondary: () => handleOpen(item),
-        secondaryLabel: "Detalhes",
+        primaryLabel: isContinue ? "Retomar no VLC" : "Assistir no VLC",
+        secondaryLabel: "Mais informações",
       });
     }
     return slides;
-  }, [handleOpen, handlePlay, recentlyAdded]);
+  }, [continueSorted, favorites, handleOpen, handlePlay, recentlyAdded]);
 
   const handleMigrate = async () => {
     setMigrating(true);
@@ -259,6 +296,15 @@ function HomePage() {
                   onViewAll={() =>
                     setViewAll({ title: "Continuar assistindo", items: continueSorted })
                   }
+                />
+                <HomeCarouselRow
+                  title="Top 10 da sua biblioteca"
+                  items={top10}
+                  onOpen={handleOpen}
+                  onPlay={handlePlay}
+                  onToggleFav={handleToggleFav}
+                  showRanking
+                  onViewAll={() => setViewAll({ title: "Top 10 da sua biblioteca", items: top10 })}
                 />
                 <section id="minha-lista" className="scroll-mt-20">
                   <HomeCarouselRow
