@@ -34,15 +34,15 @@ function MovieDetailsPage() {
     getAll().then(setItems);
   }, []);
 
-  useEffect(() => {
-    if (!inLibrary?.magnet) return;
-    void prewarmMagnet(inLibrary.magnet);
-  }, [inLibrary?.magnet]);
-
   const inLibrary = useMemo(
     () => items.find((i) => i.tmdbId === data.id) ?? null,
     [items, data.id],
   );
+
+  useEffect(() => {
+    if (!inLibrary?.magnet) return;
+    void prewarmMagnet(inLibrary.magnet);
+  }, [inLibrary?.magnet]);
   const backdrop = data.backdrop ?? data.poster;
 
   const year = data.year ?? "";
