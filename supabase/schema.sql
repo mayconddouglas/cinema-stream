@@ -119,3 +119,44 @@ on storage.objects
 for delete
 to authenticated
 using (bucket_id = 'posters');
+
+-- Cache global de metadados TMDB (TTL + reuso entre usuários)
+create table if not exists public.tmdb_cache (
+  cache_key text primary key,
+  payload jsonb not null default '{}'::jsonb,
+  expires_at timestamptz not null,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists tmdb_cache_expires_at_idx on public.tmdb_cache (expires_at);
+
+alter table public.tmdb_cache enable row level security;
+
+drop policy if exists "tmdb_cache_select_auth" on public.tmdb_cache;
+create policy "tmdb_cache_select_auth"
+on public.tmdb_cache
+for select
+to authenticated
+using (true);
+
+drop policy if exists "tmdb_cache_insert_auth" on public.tmdb_cache;
+create policy "tmdb_cache_insert_auth"
+on public.tmdb_cache
+for insert
+to authenticated
+with check (true);
+
+drop policy if exists "tmdb_cache_update_auth" on public.tmdb_cache;
+create policy "tmdb_cache_update_auth"
+on public.tmdb_cache
+for update
+to authenticated
+using (true)
+with check (true);
+
+drop policy if exists "tmdb_cache_delete_auth" on public.tmdb_cache;
+create policy "tmdb_cache_delete_auth"
+on public.tmdb_cache
+for delete
+to authenticated
+using (true);
