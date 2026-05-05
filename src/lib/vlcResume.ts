@@ -12,7 +12,7 @@ type VlcResumeSession = {
 };
 
 const VLC_RESUME_KEY = "acervos_vlc_resume_v1";
-const MIN_ELAPSED_TO_SAVE = 20;
+const MIN_ELAPSED_TO_SAVE = 8;
 const MAX_ELAPSED_TO_SAVE = 3 * 60 * 60;
 
 function clamp(value: number, min: number, max: number) {
@@ -108,6 +108,19 @@ export async function commitVlcResumeOnReturn() {
       await update(session.id, patch);
     } else {
       await patchEpisode(session.id, patch);
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("vlc-resume-committed", {
+          detail: {
+            target: session.target,
+            id: session.id,
+            progress: nextProgress,
+            duration: session.durationSeconds,
+            committedAt: now,
+          },
+        }),
+      );
     }
     clearSession();
   } catch {

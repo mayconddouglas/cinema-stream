@@ -89,13 +89,35 @@ function HomePage() {
     updatedAt: 0,
   });
 
-  useEffect(() => {
-    Promise.all([getAll(), getSeriesAll()]).then(([items, series]) => {
-      setItems(items);
-      setSeries(series);
-      setLoading(false);
-    });
+  const refreshHomeData = useCallback(async () => {
+    const [nextItems, nextSeries] = await Promise.all([getAll(), getSeriesAll()]);
+    setItems(nextItems);
+    setSeries(nextSeries);
   }, []);
+
+  useEffect(() => {
+    refreshHomeData().finally(() => setLoading(false));
+  }, [refreshHomeData]);
+
+  useEffect(() => {
+    const syncFromResume = () => {
+      const run = async () => {
+        await refreshHomeData();
+      };
+      // Small delay lets AuthProvider persist resume progress first.
+      setTimeout(() => void run(), 250);
+    };
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      syncFromResume();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("vlc-resume-committed", syncFromResume as EventListener);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("vlc-resume-committed", syncFromResume as EventListener);
+    };
+  }, [refreshHomeData]);
 
   useEffect(() => {
     loadHomeProfiles().then(setProfiles);
@@ -516,6 +538,7 @@ function HomePage() {
                 <HomeCarouselRow
                   title="Continuar assistindo"
                   items={continueSorted}
+                  emphasis
                   onOpen={handleOpen}
                   onPlay={handlePlay}
                   onToggleFav={handleToggleFav}

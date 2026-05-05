@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Loader2, Plus, Tv, Pencil } from "lucide-react";
 import { AppBottomNav } from "@/components/AppBottomNav";
 import { Button } from "@/components/ui/button";
@@ -78,18 +78,32 @@ function SeriesDetailsPage() {
   const [addingMagnetFor, setAddingMagnetFor] = useState<string | null>(null);
   const [episodeMagnet, setEpisodeMagnet] = useState("");
   const [episodeImporting, setEpisodeImporting] = useState(false);
+  const refreshLocalEpisodes = useCallback(
+    () => getEpisodesForShow(show.id).then(setLocalEpisodes),
+    [show.id],
+  );
 
   useEffect(() => {
-    getEpisodesForShow(show.id).then(setLocalEpisodes);
-  }, [
-    show.backdrop,
-    show.id,
-    show.originalTitle,
-    show.overview,
-    show.poster,
-    show.title,
-    show.year,
-  ]);
+    void refreshLocalEpisodes();
+  }, [refreshLocalEpisodes]);
+
+  useEffect(() => {
+    const sync = () => {
+      setTimeout(() => {
+        void refreshLocalEpisodes();
+      }, 250);
+    };
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      sync();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("vlc-resume-committed", sync as EventListener);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("vlc-resume-committed", sync as EventListener);
+    };
+  }, [refreshLocalEpisodes]);
 
   useEffect(() => {
     const run = async () => {

@@ -29,9 +29,28 @@ function MovieDetailsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [openingVlc, setOpeningVlc] = useState(false);
   const [vlcError, setVlcError] = useState<string | null>(null);
+  const refreshItems = () => getAll().then(setItems);
 
   useEffect(() => {
-    getAll().then(setItems);
+    void refreshItems();
+  }, []);
+
+  useEffect(() => {
+    const sync = () => {
+      setTimeout(() => {
+        void refreshItems();
+      }, 250);
+    };
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      sync();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("vlc-resume-committed", sync as EventListener);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("vlc-resume-committed", sync as EventListener);
+    };
   }, []);
 
   const inLibrary = useMemo(

@@ -16,6 +16,7 @@ export function HomeCarouselRow({
   onToggleFav,
   onViewAll,
   showRanking = false,
+  emphasis = false,
 }: {
   title: string;
   items: LibraryItem[];
@@ -24,6 +25,7 @@ export function HomeCarouselRow({
   onToggleFav?: (item: LibraryItem) => void;
   onViewAll?: () => void;
   showRanking?: boolean;
+  emphasis?: boolean;
 }) {
   if (items.length === 0) return null;
 
@@ -47,7 +49,11 @@ export function HomeCarouselRow({
             {items.map((item, idx) => (
               <CarouselItem
                 key={item.id}
-                className="pl-3 basis-[44%] sm:basis-[28%] md:basis-[20%] lg:basis-[16%] xl:basis-[14%]"
+                className={
+                  emphasis
+                    ? "pl-3 basis-[58%] sm:basis-[42%] md:basis-[31%] lg:basis-[24%] xl:basis-[20%]"
+                    : "pl-3 basis-[44%] sm:basis-[28%] md:basis-[20%] lg:basis-[16%] xl:basis-[14%]"
+                }
               >
                 <MovieTile
                   item={item}
