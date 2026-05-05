@@ -3,6 +3,11 @@ import { AlertCircle, Check, ChevronDown, Copy, Loader2, Pause, Play, X } from "
 import type { LibraryItem } from "@/lib/storage";
 import { fetchMetaWithRetry } from "@/lib/torrent";
 import {
+  addPlaybackEvent,
+  patchPlaybackSession,
+  startPlaybackSession,
+} from "@/lib/playbackAnalytics";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -97,6 +102,16 @@ function formatTime(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
+function getNetworkLabel(): string | undefined {
+  const nav = navigator as Navigator & {
+    connection?: { effectiveType?: string; downlink?: number };
+  };
+  const type = nav.connection?.effectiveType;
+  const downlink = nav.connection?.downlink;
+  if (type && Number.isFinite(downlink)) return `${type} (${downlink}mbps)`;
+  return type ?? undefined;
+}
+
 export function Player({
   item,
   fileIndex,
@@ -131,9 +146,16 @@ export function Player({
   const [hasWatched, setHasWatched] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const hlsRef = useRef<{ destroy: () => void } | null>(null);
   const lastSavedRef = useRef(0);
   const lastTimeRef = useRef(0);
   const lastDurationRef = useRef(0);
+  const sessionIdRef = useRef<string>("");
+  const watchStartedAtRef = useRef<number>(0);
+  const startupStartedAtRef = useRef<number>(0);
+  const bufferStartedAtRef = useRef<number>(0);
+  const rebufferCountRef = useRef<number>(0);
+  const rebufferMsRef = useRef<number>(0);
 
   useEffect(() => {
     setView("details");
@@ -207,6 +229,72 @@ export function Player({
     void resolve();
   }, [fileIndex, item.fileIndex, item.id, item.magnet, item.progress]);
 
+  useEffect(() => {
+    return () => {
+      try {
+        hlsRef.current?.destroy();
+      } catch {
+        void 0;
+      }
+      hlsRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || view !== "watch" || phase !== "ready" || !streamUrl) return;
+
+    let cancelled = false;
+    const setup = async () => {
+      try {
+        hlsRef.current?.destroy();
+      } catch {
+        void 0;
+      }
+      hlsRef.current = null;
+      video.removeAttribute("src");
+      video.load();
+
+      const isHls = /\.m3u8(\?|$)/i.test(streamUrl);
+      if (!isHls) {
+        video.src = streamUrl;
+        return;
+      }
+
+      const canNativeHls = video.canPlayType("application/vnd.apple.mpegurl");
+      if (canNativeHls) {
+        video.src = streamUrl;
+        return;
+      }
+
+      const mod = await import("hls.js");
+      if (cancelled) return;
+      const HlsClass = mod.default;
+      if (!HlsClass?.isSupported?.()) {
+        video.src = streamUrl;
+        return;
+      }
+
+      const hls = new HlsClass({
+        enableWorker: true,
+        lowLatencyMode: true,
+      });
+      hls.attachMedia(video);
+      hls.on(HlsClass.Events.MEDIA_ATTACHED, () => {
+        hls.loadSource(streamUrl);
+      });
+      hls.on(HlsClass.Events.ERROR, () => {
+        setBrowserError(true);
+      });
+      hlsRef.current = hls;
+    };
+
+    void setup();
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, streamUrl, view]);
+
   const saveProgress = (source: "browser" | "manual" = "browser") => {
     const now = Date.now();
     if (source === "browser") {
@@ -223,9 +311,26 @@ export function Player({
     }
   };
 
+  const finishSession = (status: "ended" | "closed" | "error") => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return;
+    const now = Date.now();
+    const watchSeconds = watchStartedAtRef.current
+      ? Math.max(0, Math.floor((now - watchStartedAtRef.current) / 1000))
+      : 0;
+    void patchPlaybackSession(sessionId, {
+      status,
+      watch_seconds: watchSeconds,
+      rebuffer_count: rebufferCountRef.current,
+      rebuffer_ms: rebufferMsRef.current,
+      ended_at: new Date().toISOString(),
+    });
+  };
+
   const handleClose = () => {
     if (hasWatched) {
       saveProgress("browser");
+      finishSession("closed");
       onClose();
       return;
     }
@@ -234,6 +339,7 @@ export function Player({
       setVlcResumeOpen(true);
       return;
     }
+    finishSession("closed");
     onClose();
   };
 
@@ -252,8 +358,37 @@ export function Player({
 
   const canPlayInBrowser = useMemo(() => phase === "ready" && !!streamUrl, [phase, streamUrl]);
 
+  const handleOpenVlc = () => {
+    const sessionId = crypto.randomUUID();
+    void startPlaybackSession({
+      sessionId,
+      libraryItemId: item.id,
+      title: item.title,
+      streamMode: "vlc",
+      device: navigator.userAgent,
+      network: getNetworkLabel(),
+    });
+    void addPlaybackEvent(sessionId, "open_vlc", { streamUrl });
+  };
+
   const startBrowserPlay = async () => {
     if (!canPlayInBrowser) return;
+    if (!sessionIdRef.current) {
+      sessionIdRef.current = crypto.randomUUID();
+      startupStartedAtRef.current = Date.now();
+      watchStartedAtRef.current = Date.now();
+      rebufferCountRef.current = 0;
+      rebufferMsRef.current = 0;
+      void startPlaybackSession({
+        sessionId: sessionIdRef.current,
+        libraryItemId: item.id,
+        title: item.title,
+        streamMode: "browser",
+        device: navigator.userAgent,
+        network: getNetworkLabel(),
+      });
+      void addPlaybackEvent(sessionIdRef.current, "play_request", { streamUrl });
+    }
     setView("watch");
     setBrowserError(false);
     setHasWatched(true);
@@ -267,6 +402,7 @@ export function Player({
         await v.play();
         setPaused(v.paused);
       } catch {
+        void addPlaybackEvent(sessionIdRef.current, "play_error", { stage: "autoplay" });
         setBrowserError(true);
       }
     });
@@ -300,6 +436,12 @@ export function Player({
       lastSavedRef.current = now;
       if (d > 10 && t > 3) {
         onProgress(item.id, { progress: t, duration: d, lastPlayedAt: now });
+        const sessionId = sessionIdRef.current;
+        if (sessionId && now % 24000 < 12000) {
+          void patchPlaybackSession(sessionId, {
+            watch_seconds: Math.max(0, Math.floor((now - watchStartedAtRef.current) / 1000)),
+          });
+        }
       }
     }
   };
@@ -308,6 +450,10 @@ export function Player({
     const v = videoRef.current;
     if (!v) return;
     onProgress(item.id, { progress: v.duration, duration: v.duration, lastPlayedAt: Date.now() });
+    finishSession("ended");
+    void addPlaybackEvent(sessionIdRef.current, "ended", {
+      duration: Number.isFinite(v.duration) ? v.duration : null,
+    });
   };
 
   useEffect(() => {
@@ -337,14 +483,53 @@ export function Player({
             >
               <video
                 ref={videoRef}
-                src={streamUrl}
                 controls={!minimized}
                 autoPlay
                 playsInline
                 className={minimized ? "h-full w-full object-cover" : "w-full aspect-video"}
                 onTimeUpdate={onTimeUpdate}
                 onEnded={onEnded}
-                onError={() => setBrowserError(true)}
+                onLoadedData={() => {
+                  const sessionId = sessionIdRef.current;
+                  if (!sessionId || !startupStartedAtRef.current) return;
+                  const startupMs = Math.max(0, Date.now() - startupStartedAtRef.current);
+                  void patchPlaybackSession(sessionId, { startup_ms: startupMs });
+                  void addPlaybackEvent(sessionId, "startup_ready", { startupMs });
+                  startupStartedAtRef.current = 0;
+                }}
+                onWaiting={() => {
+                  const sessionId = sessionIdRef.current;
+                  if (!sessionId || bufferStartedAtRef.current) return;
+                  bufferStartedAtRef.current = Date.now();
+                  void addPlaybackEvent(sessionId, "buffering_start", {
+                    at: lastTimeRef.current,
+                  });
+                }}
+                onPlaying={() => {
+                  const sessionId = sessionIdRef.current;
+                  if (!sessionId || !bufferStartedAtRef.current) return;
+                  const delta = Math.max(0, Date.now() - bufferStartedAtRef.current);
+                  bufferStartedAtRef.current = 0;
+                  if (delta > 150) {
+                    rebufferCountRef.current += 1;
+                    rebufferMsRef.current += delta;
+                    void patchPlaybackSession(sessionId, {
+                      rebuffer_count: rebufferCountRef.current,
+                      rebuffer_ms: rebufferMsRef.current,
+                    });
+                    void addPlaybackEvent(sessionId, "buffering_end", {
+                      durationMs: delta,
+                      at: lastTimeRef.current,
+                    });
+                  }
+                }}
+                onError={() => {
+                  void addPlaybackEvent(sessionIdRef.current, "playback_error", {
+                    at: lastTimeRef.current,
+                  });
+                  finishSession("error");
+                  setBrowserError(true);
+                }}
                 onPlay={() => setPaused(false)}
                 onPause={() => setPaused(true)}
               />
@@ -479,6 +664,7 @@ export function Player({
                   </Button>
                   <a
                     href={vlcUrl}
+                    onClick={handleOpenVlc}
                     className="w-full inline-flex items-center justify-center gap-3 rounded-2xl bg-white/10 backdrop-blur-md px-8 py-4 text-base font-semibold text-white shadow-glow hover:bg-white/18 active:scale-95 transition border border-white/10 min-h-[56px]"
                   >
                     <svg
