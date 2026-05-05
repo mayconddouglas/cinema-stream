@@ -4,6 +4,8 @@ import { Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+const HERO_AUTO_MS = 6500;
+
 export type HeroSlide = {
   key: string;
   title: string;
@@ -19,12 +21,17 @@ export type HeroSlide = {
 export function HeroCarousel({ slides }: { slides: HeroSlide[] }) {
   const [viewportRef, api] = useEmblaCarousel({ loop: true, align: "start" });
   const [index, setIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const [progress, setProgress] = useState(0);
 
   const dots = useMemo(() => slides.map((_, i) => i), [slides]);
 
   useEffect(() => {
     if (!api) return;
-    const handle = () => setIndex(api.selectedScrollSnap());
+    const handle = () => {
+      setIndex(api.selectedScrollSnap());
+      setProgress(0);
+    };
     handle();
     api.on("select", handle);
     api.on("reInit", handle);
@@ -33,11 +40,44 @@ export function HeroCarousel({ slides }: { slides: HeroSlide[] }) {
     };
   }, [api]);
 
+  useEffect(() => {
+    const onVisibility = () => setPaused(document.visibilityState !== "visible");
+    document.addEventListener("visibilitychange", onVisibility);
+    onVisibility();
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  useEffect(() => {
+    if (!api || slides.length <= 1 || paused) return;
+    let rafId = 0;
+    let startedAt = performance.now();
+    const tick = (now: number) => {
+      const elapsed = now - startedAt;
+      const pct = Math.min(1, elapsed / HERO_AUTO_MS);
+      setProgress(pct);
+      if (pct >= 1) {
+        api.scrollNext();
+        startedAt = now;
+        setProgress(0);
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [api, index, paused, slides.length]);
+
   if (slides.length === 0) return null;
 
   return (
     <section className="-mx-6 overflow-hidden rounded-3xl border border-border/40 bg-card">
-      <div ref={viewportRef} className="overflow-hidden">
+      <div
+        ref={viewportRef}
+        className="overflow-hidden"
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+        onTouchStart={() => setPaused(true)}
+        onTouchEnd={() => setPaused(false)}
+      >
         <div className="flex">
           {slides.map((s) => (
             <div key={s.key} className="min-w-0 shrink-0 grow-0 basis-full">
@@ -90,7 +130,24 @@ export function HeroCarousel({ slides }: { slides: HeroSlide[] }) {
         </div>
       </div>
 
-      <div className="px-6 pb-4">
+      <div className="px-6 pb-4 space-y-2">
+        {slides.length > 1 ? (
+          <div className="grid grid-flow-col auto-cols-fr gap-1.5">
+            {dots.map((i) => (
+              <div
+                key={`hero-progress-${i}`}
+                className="h-1 rounded-full bg-white/15 overflow-hidden"
+              >
+                <div
+                  className="h-full bg-primary transition-[width] duration-200"
+                  style={{
+                    width: `${i < index ? 100 : i === index ? Math.round(progress * 100) : 0}%`,
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div className="flex items-center justify-center gap-2">
           {dots.map((i) => (
             <button

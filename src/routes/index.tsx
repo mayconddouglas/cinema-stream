@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Film, Loader2, Plus } from "lucide-react";
+import { Film, Loader2, Plus, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { AppBottomNav } from "@/components/AppBottomNav";
 import { AddMagnetDialog } from "@/components/AddMagnetDialog";
@@ -125,6 +125,42 @@ function HomePage() {
 
     return rows;
   }, [items]);
+
+  const becauseWatched = useMemo(() => {
+    const anchor = continueSorted[0] ?? favorites[0] ?? null;
+    if (!anchor) return { anchor: null as LibraryItem | null, items: [] as LibraryItem[] };
+
+    const normalized = `${anchor.title} ${anchor.description ?? ""}`.toLowerCase();
+    const tokens = normalized
+      .split(/[^a-z0-9à-ÿ]+/i)
+      .filter((t) => t.length >= 4)
+      .slice(0, 8);
+
+    const scored = items
+      .filter((item) => item.id !== anchor.id)
+      .map((item) => {
+        let score = 0;
+        if (anchor.year && item.year && anchor.year === item.year) score += 40;
+        if (item.favorite) score += 20;
+        if (item.progress && item.duration) {
+          const pct = (item.progress / item.duration) * 100;
+          if (pct > 5 && pct < 95) score += 20;
+        }
+        const haystack = `${item.title} ${item.description ?? ""}`.toLowerCase();
+        for (const token of tokens) {
+          if (haystack.includes(token)) score += 10;
+        }
+        const recencyDays = Math.max(1, (Date.now() - item.addedAt) / (1000 * 60 * 60 * 24));
+        score += 15 / Math.sqrt(recencyDays);
+        return { item, score };
+      })
+      .filter((entry) => entry.score > 12)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 12)
+      .map((entry) => entry.item);
+
+    return { anchor, items: scored };
+  }, [continueSorted, favorites, items]);
 
   const handlePlay = useCallback(
     (item: LibraryItem) => {
@@ -285,6 +321,35 @@ function HomePage() {
         ) : (
           <>
             {heroSlides.length > 0 ? <HeroCarousel slides={heroSlides} /> : null}
+            <section className="rounded-3xl border border-border/40 bg-white/[0.03] p-4 md:p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground">
+                    Descoberta
+                  </p>
+                  <h2 className="text-base font-semibold text-foreground">
+                    Não sabe o que ver hoje?
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Explore tendências, catálogos e resultados rápidos no buscador.
+                  </p>
+                </div>
+                <Sparkles className="h-4 w-4 text-primary shrink-0 mt-1" />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button onClick={() => navigate({ to: "/buscar" })} className="rounded-2xl">
+                  <Search className="h-4 w-4" />
+                  Explorar catálogo
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => navigate({ to: "/buscar" })}
+                  className="rounded-2xl"
+                >
+                  Ver em alta
+                </Button>
+              </div>
+            </section>
             {items.length > 0 && (
               <>
                 <HomeCarouselRow
@@ -306,6 +371,21 @@ function HomePage() {
                   showRanking
                   onViewAll={() => setViewAll({ title: "Top 10 da sua biblioteca", items: top10 })}
                 />
+                {becauseWatched.anchor && becauseWatched.items.length > 0 ? (
+                  <HomeCarouselRow
+                    title={`Porque você assistiu ${becauseWatched.anchor.title}`}
+                    items={becauseWatched.items}
+                    onOpen={handleOpen}
+                    onPlay={handlePlay}
+                    onToggleFav={handleToggleFav}
+                    onViewAll={() =>
+                      setViewAll({
+                        title: `Porque você assistiu ${becauseWatched.anchor?.title ?? ""}`,
+                        items: becauseWatched.items,
+                      })
+                    }
+                  />
+                ) : null}
                 <section id="minha-lista" className="scroll-mt-20">
                   <HomeCarouselRow
                     title="Minha lista"
